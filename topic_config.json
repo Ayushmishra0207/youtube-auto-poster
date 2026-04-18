@@ -1,0 +1,163 @@
+{
+  "slots": [
+    {"slot": "06:30", "category": "news_india",       "custom_topic": null},
+    {"slot": "06:40", "category": "news_world",       "custom_topic": null},
+    {"slot": "06:50", "category": "historical_story", "custom_topic": null},
+    {"slot": "07:00", "category": "science_tech",     "custom_topic": null},
+    {"slot": "07:10", "category": "cartoon_animation","custom_topic": null},
+    {"slot": "07:20", "category": "sports",           "custom_topic": null},
+    {"slot": "07:30", "category": "entertainment",    "custom_topic": null}
+  ],
+  "categories": {
+    "news_india": {
+      "label": "News India",
+      "color": "#4FC3F7",
+      "description": "Current Indian national news and events",
+      "search_query": "India latest news today",
+      "prompt_style": "factual news reporting, covering major Indian events, politics, economy",
+      "yt_category_id": "25",
+      "fallback_topics": [
+        "India politics news today",
+        "Indian economy latest update",
+        "India government news today",
+        "India state election news",
+        "India social issues news"
+      ]
+    },
+    "news_world": {
+      "label": "World News",
+      "color": "#818CF8",
+      "description": "International news and global events",
+      "search_query": "world news today international breaking",
+      "prompt_style": "international news reporting, covering global events and world affairs in clear Hindi",
+      "yt_category_id": "25",
+      "fallback_topics": [
+        "US news latest today",
+        "World economic news today",
+        "International news breaking",
+        "China news today latest",
+        "Russia Ukraine news update"
+      ]
+    },
+    "historical_story": {
+      "label": "Historical Story",
+      "color": "#F59E0B",
+      "description": "Indian and world historical stories and events",
+      "search_query": "Indian history story facts interesting",
+      "prompt_style": "engaging historical storytelling, bringing history alive with vivid detail and narrative flow in Hindi",
+      "yt_category_id": "27",
+      "fallback_topics": [
+        "Mughal empire history India",
+        "Ancient India civilization story",
+        "Freedom fighters of India",
+        "Medieval Indian kingdoms history",
+        "Chhatrapati Shivaji Maharaj story"
+      ]
+    },
+    "cartoon_animation": {
+      "label": "Cartoon / Animation",
+      "color": "#34D399",
+      "description": "Animated stories and cartoon content for families",
+      "search_query": "cartoon moral story Hindi kids",
+      "prompt_style": "fun and engaging animated story format with clear moral lessons, imaginative characters, suitable for family viewing in simple Hindi",
+      "yt_category_id": "1",
+      "fallback_topics": [
+        "Moral story for kids Hindi",
+        "Panchatantra stories Hindi",
+        "Animal friendship story Hindi",
+        "Fairy tale story Hindi",
+        "Tenali Raman clever story"
+      ]
+    },
+    "science_tech": {
+      "label": "Science & Tech",
+      "color": "#60A5FA",
+      "description": "Science discoveries and technology news",
+      "search_query": "science technology news India discovery",
+      "prompt_style": "science and technology explained in simple clear Hindi, making complex topics accessible to general Indian audience",
+      "yt_category_id": "28",
+      "fallback_topics": [
+        "ISRO space mission news",
+        "AI technology news India",
+        "Latest technology invention news",
+        "Space science discovery news",
+        "India technology breakthrough news"
+      ]
+    },
+    "sports": {
+      "label": "Sports",
+      "color": "#F97316",
+      "description": "Sports news, cricket highlights and updates",
+      "search_query": "India cricket sports news today",
+      "prompt_style": "exciting sports commentary and news reporting in energetic Hindi, making viewers feel the excitement",
+      "yt_category_id": "17",
+      "fallback_topics": [
+        "Cricket news India today",
+        "IPL cricket highlights today",
+        "India cricket match news",
+        "Football sports news India",
+        "Sports achievement India news"
+      ]
+    },
+    "entertainment": {
+      "label": "Entertainment",
+      "color": "#EC4899",
+      "description": "Bollywood, OTT, and entertainment news",
+      "search_query": "Bollywood entertainment celebrity news Hindi",
+      "prompt_style": "entertainment news style, covering Bollywood, celebrities, movies and pop culture in engaging conversational Hindi",
+      "yt_category_id": "24",
+      "fallback_topics": [
+        "Bollywood celebrity news today",
+        "New Hindi movie release this week",
+        "OTT web series release today",
+        "Bollywood awards news",
+        "Film industry news today"
+      ]
+    },
+    "health": {
+      "label": "Health & Lifestyle",
+      "color": "#A78BFA",
+      "description": "Health tips, wellness and lifestyle content",
+      "search_query": "health tips Hindi wellness India",
+      "prompt_style": "informative health content in simple Hindi with practical actionable tips tailored for Indian audience and lifestyle",
+      "yt_category_id": "26",
+      "fallback_topics": [
+        "Health tips in Hindi",
+        "Yoga benefits for health",
+        "Ayurveda home remedies Hindi",
+        "Healthy diet tips India",
+        "Fitness tips in Hindi"
+      ]
+    },
+    "finance": {
+      "label": "Finance & Market",
+      "color": "#FCD34D",
+      "description": "Stock market, business and financial news",
+      "search_query": "India share market finance news today",
+      "prompt_style": "financial news and tips in simple Hindi, explaining markets and money concepts clearly for common people",
+      "yt_category_id": "25",
+      "fallback_topics": [
+        "Share market India news today",
+        "Sensex Nifty update today",
+        "Investment tips for Indians",
+        "Indian economy news today",
+        "Business news India today"
+      ]
+    },
+    "spiritual": {
+      "label": "Spiritual",
+      "color": "#FB923C",
+      "description": "Spiritual stories, mythology and religious content",
+      "search_query": "spiritual story India Hindi devotional",
+      "prompt_style": "devotional and spiritual content in respectful Hindi, uplifting storytelling that resonates with Indian spiritual traditions",
+      "yt_category_id": "22",
+      "fallback_topics": [
+        "Hindu mythology story Hindi",
+        "Bhagavad Gita wisdom Hindi",
+        "Indian festival significance story",
+        "Ramayana story episode",
+        "Mahabharata story episode"
+      ]
+    }
+  }
+}

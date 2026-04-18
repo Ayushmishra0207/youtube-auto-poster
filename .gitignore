@@ -1,0 +1,41 @@
+# ── Secrets & credentials ─────────────────────────────────────
+.env
+*.pickle
+client_secrets.json
+api/credentials.json
+
+# ── Pipeline output (large files) ─────────────────────────────
+output/
+logs/
+pipeline.lock
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Node / Next.js ────────────────────────────────────────────
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.vercel/
+dashboard/out/
+
+# ── Assets (large binaries, downloaded by setup scripts) ──────
+assets/fonts/
+assets/music/
+
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp

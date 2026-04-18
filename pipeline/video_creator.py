@@ -1,0 +1,293 @@
+"""
+Assemble the final MP4 from slides + voice-over + background music.
+Compatible with MoviePy 2.x (uses with_* API).
+
+Video structure
+───────────────
+  1. Title card   (5 s, music only)
+  2. Sections     (voice duration + 0.8 s tail each)
+  3. Outro CTA    (5 s, music only)
+"""
+import os
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import moviepy as mpe
+
+from config import (
+    BG_MUSIC_PATH, BG_MUSIC_VOLUME,
+    HINDI_FONT_BOLD, HINDI_FONT_REGULAR,
+    SLIDE_COLORS, VIDEO_FPS, VIDEO_HEIGHT, VIDEO_WIDTH, VIDEO_BITRATE,
+)
+from pipeline.logger import log
+
+# ─── Colour / image helpers ───────────────────────────────────────────────────
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _gradient(c1: str, c2: str, w: int = VIDEO_WIDTH, h: int = VIDEO_HEIGHT) -> np.ndarray:
+    r1, g1, b1 = _hex_to_rgb(c1)
+    r2, g2, b2 = _hex_to_rgb(c2)
+    t = np.linspace(0, 1, h)[:, None]
+    r = (r1 + (r2 - r1) * t).astype(np.uint8) * np.ones((h, w), np.uint8)
+    g = (g1 + (g2 - g1) * t).astype(np.uint8) * np.ones((h, w), np.uint8)
+    b = (b1 + (b2 - b1) * t).astype(np.uint8) * np.ones((h, w), np.uint8)
+    return np.stack([r, g, b], axis=-1)
+
+
+def _load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _wrap(text: str, font: ImageFont.FreeTypeFont, max_px: int) -> list[str]:
+    words, lines, cur = text.split(), [], ""
+    for word in words:
+        test = f"{cur} {word}".strip()
+        if font.getbbox(test)[2] <= max_px:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+# ─── Slide renderers ──────────────────────────────────────────────────────────
+
+def _title_card(title: str, thumbnail_text: str, colors: tuple) -> np.ndarray:
+    bg = Image.fromarray(_gradient(*colors)).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    f_title = _load_font(HINDI_FONT_BOLD, 88)
+    f_sub   = _load_font(HINDI_FONT_REGULAR, 50)
+
+    lines   = _wrap(title, f_title, VIDEO_WIDTH - 200)
+    total_h = len(lines) * 108
+    y       = (VIDEO_HEIGHT - total_h) // 2 - 60
+
+    for line in lines:
+        w = f_title.getbbox(line)[2]
+        draw.text(((VIDEO_WIDTH - w) // 2, y), line, font=f_title,
+                  fill=(255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0))
+        y += 108
+
+    bar_y = y + 18
+    draw.rectangle([(VIDEO_WIDTH // 2 - 220, bar_y),
+                    (VIDEO_WIDTH // 2 + 220, bar_y + 4)], fill=(79, 195, 247))
+
+    if thumbnail_text:
+        tw = f_sub.getbbox(thumbnail_text)[2]
+        draw.text(((VIDEO_WIDTH - tw) // 2, bar_y + 20), thumbnail_text,
+                  font=f_sub, fill=(79, 195, 247))
+
+    return np.array(bg)
+
+
+def _section_slide(
+    heading: str,
+    narration: str,
+    bg_path: Optional[str],
+    colors: tuple,
+) -> np.ndarray:
+    if bg_path and os.path.exists(bg_path):
+        bg = (Image.open(bg_path).convert("RGBA")
+                   .resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS))
+        overlay = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 165))
+        bg = Image.alpha_composite(bg, overlay).convert("RGB")
+    else:
+        bg = Image.fromarray(_gradient(*colors)).convert("RGB")
+
+    draw = ImageDraw.Draw(bg)
+    f_h  = _load_font(HINDI_FONT_BOLD, 68)
+    f_b  = _load_font(HINDI_FONT_REGULAR, 42)
+    PAD  = 90
+    y    = 80
+
+    for line in _wrap(heading, f_h, VIDEO_WIDTH - 2 * PAD)[:2]:
+        draw.text((PAD, y), line, font=f_h, fill=(255, 255, 255),
+                  stroke_width=2, stroke_fill=(0, 0, 0))
+        y += f_h.getbbox(line)[3] + 12
+
+    draw.rectangle([(PAD, y + 10), (VIDEO_WIDTH - PAD, y + 14)], fill=(79, 195, 247))
+    y += 40
+
+    preview = narration[:240] + ("..." if len(narration) > 240 else "")
+    for line in _wrap(preview, f_b, VIDEO_WIDTH - 2 * PAD)[:8]:
+        draw.text((PAD, y), line, font=f_b, fill=(220, 220, 220))
+        y += f_b.getbbox(line)[3] + 14
+
+    return np.array(bg)
+
+
+def _outro_card() -> np.ndarray:
+    bg   = Image.fromarray(_gradient("#000428", "#004e92")).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    f1   = _load_font(HINDI_FONT_BOLD, 78)
+    f2   = _load_font(HINDI_FONT_REGULAR, 48)
+
+    # Proper Hindi Devanagari text
+    msg1 = "चैनल को Subscribe करें"
+    msg2 = "Like, Share और घंटी दबाना न भूलें!"
+
+    w1   = f1.getbbox(msg1)[2]
+    w2   = f2.getbbox(msg2)[2]
+
+    draw.text(((VIDEO_WIDTH - w1) // 2, VIDEO_HEIGHT // 2 - 100),
+              msg1, font=f1, fill=(255, 68, 68),
+              stroke_width=2, stroke_fill=(0, 0, 0))
+    draw.text(((VIDEO_WIDTH - w2) // 2, VIDEO_HEIGHT // 2 + 30),
+              msg2, font=f2, fill=(255, 255, 255))
+
+    return np.array(bg)
+
+
+# ─── Audio loop helper (MoviePy 2.x compatible) ───────────────────────────────
+
+def _loop_audio(audio: mpe.AudioFileClip, target_duration: float) -> mpe.AudioFileClip:
+    """Tile an audio clip until it fills target_duration seconds."""
+    if audio.duration >= target_duration:
+        return audio.subclipped(0, target_duration)
+    loops = int(target_duration / audio.duration) + 1
+    tiled = mpe.concatenate_audioclips([audio] * loops)
+    return tiled.subclipped(0, target_duration)
+
+
+# ─── Public API ───────────────────────────────────────────────────────────────
+
+def create_thumbnail(script: dict, output_path: str) -> str:
+    """
+    Render the title card as a JPEG thumbnail (1920×1080).
+    Returns the saved file path.
+    YouTube recommends 1280×720 min; 1920×1080 is accepted and looks sharper.
+    """
+    arr = _title_card(
+        script["title"],
+        script.get("thumbnail_text", ""),
+        SLIDE_COLORS[0],
+    )
+    img = Image.fromarray(arr)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path, "JPEG", quality=92, optimize=True)
+    log.info("Thumbnail saved → %s", output_path)
+    return output_path
+
+
+def create_video(
+    script: dict,
+    voice_files: list[str],
+    bg_images: list[Optional[str]],
+    output_path: str,
+) -> str:
+    """Render the complete video and write to output_path."""
+    sections = script["sections"]
+    clips: list[mpe.ImageClip] = []
+
+    # ── 1. Title card (5 s, no voice) ────────────────────────────────────────
+    title_arr = _title_card(
+        script["title"],
+        script.get("thumbnail_text", ""),
+        SLIDE_COLORS[0],
+    )
+    clips.append(
+        mpe.ImageClip(title_arr).with_duration(5).with_fps(VIDEO_FPS)
+    )
+
+    # ── 2. Content sections ───────────────────────────────────────────────────
+    for i, (section, vpath, bgpath) in enumerate(
+        zip(sections, voice_files, bg_images)
+    ):
+        if not vpath or not os.path.exists(vpath):
+            log.warning("Skipping section %d — no voice file", i + 1)
+            continue
+
+        audio = mpe.AudioFileClip(vpath)
+        dur   = audio.duration + 0.8
+
+        frame = _section_slide(
+            section["heading"],
+            section["narration"],
+            bgpath,
+            SLIDE_COLORS[(i + 1) % len(SLIDE_COLORS)],
+        )
+        clip = (
+            mpe.ImageClip(frame)
+            .with_duration(dur)
+            .with_fps(VIDEO_FPS)
+            .with_audio(audio)
+        )
+        clips.append(clip)
+
+    # ── 3. Outro (5 s, no voice) ──────────────────────────────────────────────
+    clips.append(
+        mpe.ImageClip(_outro_card()).with_duration(5).with_fps(VIDEO_FPS)
+    )
+
+    # ── 4. Concatenate ────────────────────────────────────────────────────────
+    final = mpe.concatenate_videoclips(clips, method="compose")
+
+    # ── 5. Background music (optional) ────────────────────────────────────────
+    if os.path.exists(BG_MUSIC_PATH):
+        try:
+            music = (
+                mpe.AudioFileClip(BG_MUSIC_PATH)
+                .with_volume_scaled(BG_MUSIC_VOLUME)
+            )
+            music = _loop_audio(music, final.duration)
+
+            existing = final.audio
+            mixed = (
+                mpe.CompositeAudioClip([existing, music])
+                if existing
+                else music
+            )
+            final = final.with_audio(mixed)
+        except Exception as e:
+            log.warning("Background music skipped: %s", e)
+
+    # ── 6. Render ─────────────────────────────────────────────────────────────
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Use a unique per-video temp file to avoid Windows file-lock conflicts
+    temp_audio = str(out_path.parent / "temp_audio.mp4")
+    log.info("Rendering video → %s", output_path)
+    try:
+        final.write_videofile(
+            output_path,
+            fps=VIDEO_FPS,
+            codec="libx264",
+            audio_codec="aac",
+            bitrate=VIDEO_BITRATE,
+            preset="fast",
+            logger=None,
+            threads=4,
+            temp_audiofile=temp_audio,
+            remove_temp=False,   # we delete manually to avoid WinError 32
+        )
+    finally:
+        # Close clips first to release all Windows file handles
+        final.close()
+        for c in clips:
+            c.close()
+        # Now safely delete all temp audio files (ours + MoviePy's default)
+        import time as _time
+        default_temp = str(out_path.parent / "finalTEMP_MPY_wvf_snd.mp4")
+        for tmp in [temp_audio, default_temp]:
+            for _ in range(5):
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                    break
+                except OSError:
+                    _time.sleep(1)
+
+    log.info("Video render complete: %s", output_path)
+    return output_path
