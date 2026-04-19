@@ -51,7 +51,7 @@ TOKEN_FILE       = BASE_DIR / "youtube_token.pickle"
 PYTHON           = sys.executable
 
 IST = timezone(timedelta(hours=5, minutes=30))
-UPLOAD_SLOTS = ["06:30", "06:40", "06:50", "07:00", "07:10", "07:20", "07:30"]
+UPLOAD_SLOTS = ["18:30", "18:40", "18:50", "19:00", "19:10", "19:20", "19:30"]
 
 _pipeline_proc: Optional[subprocess.Popen] = None
 
@@ -160,8 +160,8 @@ async def status():
         "today_date": _today(),
         "today_video_count": video_count,
         "total_slots": len(UPLOAD_SLOTS),
-        "next_scheduled_run": "02:30 IST",
-        "upload_window": "06:30 – 07:30 IST",
+        "next_scheduled_run": "14:30 IST",
+        "upload_window": "18:30 – 19:30 IST",
         "last_log": last_log[0] if last_log else "",
     }
 
