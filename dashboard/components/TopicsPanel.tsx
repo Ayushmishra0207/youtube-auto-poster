@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { api, type TopicConfigSlot } from "@/lib/api";
 import { Check, X, Pencil, ChevronDown, RefreshCw, Save } from "lucide-react";
 
-const SLOTS = ["06:30","06:40","06:50","07:00","07:10","07:20","07:30"];
+const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30"];
 
 interface Category {
   label: string;

@@ -91,7 +91,7 @@ function MonetizationFooter() {
       {/* Targets */}
       <div className="pt-0.5 space-y-0.5">
         <p className="text-[10px]" style={{ color: "var(--muted)" }}>Need: 1,000 subs · 4,000 watch hrs</p>
-        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 02:30 IST · Upload 06:30–07:30</p>
+        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 14:30 IST · Upload 18:30–19:30</p>
       </div>
     </div>
   );

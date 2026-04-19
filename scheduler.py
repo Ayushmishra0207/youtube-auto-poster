@@ -2,12 +2,12 @@
 Daily pipeline scheduler.
 
 Timeline (every day):
-  02:30 IST  -> pipeline kicks off, generates 7 videos
-  ~05:30 IST -> all uploads done, scheduled for 06:30-07:30 IST
-  06:30 IST  -> Video 1 goes live   (most searched topic)
-  06:40 IST  -> Video 2 goes live
+  14:30 IST  -> pipeline kicks off, generates 7 videos
+  ~17:30 IST -> all uploads done, scheduled for 18:30-19:30 IST
+  18:30 IST  -> Video 1 goes live   (prime-time Hindi audience)
+  18:40 IST  -> Video 2 goes live
   ...
-  07:30 IST  -> Video 7 goes live
+  19:30 IST  -> Video 7 goes live
 
 Run as a background service:
   python scheduler.py
@@ -344,7 +344,7 @@ def run_pipeline():
     log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
     _cleanup_old_output()
 
-    log.info("Pipeline complete. Videos scheduled for 06:30–07:30 IST.")
+    log.info("Pipeline complete. Videos scheduled for 18:30–19:30 IST.")
     log.info("=" * 60)
     _release_lock()
 

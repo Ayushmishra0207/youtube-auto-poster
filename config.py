@@ -30,14 +30,14 @@ VIDEO_FPS    = 24
 VIDEO_BITRATE = "4000k"
 
 # ─── Upload schedule (IST) ─────────────────────────────────────────────────────
-# 7 slots: 6:30 → 7:30, every 10 minutes
+# 7 slots: 18:30 → 19:30 IST (evening prime time — peak Hindi audience)
 UPLOAD_SLOTS_IST = [
-    "06:30", "06:40", "06:50",
-    "07:00", "07:10", "07:20", "07:30",
+    "18:30", "18:40", "18:50",
+    "19:00", "19:10", "19:20", "19:30",
 ]
 
-# How many hours before first slot to start generation (so videos are ready)
-GENERATION_LEAD_HOURS = 4   # generates at ~2:30 AM for 6:30 upload
+# Generate at 14:30 IST so all 7 videos are ready before 18:30 upload
+GENERATION_LEAD_HOURS = 4   # pipeline starts at 14:30 IST
 
 # ─── Fonts (downloaded by setup_fonts.py) ─────────────────────────────────────
 HINDI_FONT_BOLD    = str(ASSETS_DIR / "fonts" / "NotoSansDevanagari-Bold.ttf")
@@ -46,8 +46,8 @@ HINDI_FONT_REGULAR = str(ASSETS_DIR / "fonts" / "NotoSansDevanagari-Regular.ttf"
 # ─── TTS ───────────────────────────────────────────────────────────────────────
 # Edge TTS (primary) — Microsoft Madhur Neural, deep Hindi male voice
 TTS_VOICE  = os.getenv("TTS_VOICE", "hi-IN-MadhurNeural")
-TTS_RATE   = os.getenv("TTS_RATE",  "-5%")    # slightly slower = clearer delivery
-TTS_PITCH  = os.getenv("TTS_PITCH", "-8Hz")   # lower pitch = heavier/deeper voice
+TTS_RATE   = os.getenv("TTS_RATE",  "-12%")   # deliberate news-anchor pace
+TTS_PITCH  = os.getenv("TTS_PITCH", "-4Hz")   # slight depth, stays natural
 # gTTS fallback (used only if Edge TTS fails)
 TTS_LANG   = "hi"
 

@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { VideoMeta } from "@/lib/types";
 import { Clock, Upload, CheckCircle } from "lucide-react";
 
-const SLOTS = ["06:30","06:40","06:50","07:00","07:10","07:20","07:30"];
+const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30"];
 
 export default function ScheduleTimeline() {
   const [videos, setVideos] = useState<VideoMeta[]>([]);
@@ -26,7 +26,7 @@ export default function ScheduleTimeline() {
       <div>
         <h1 className="text-2xl font-bold text-white">Schedule</h1>
         <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-          Upload timeline — 7 slots from 06:30 to 07:30 IST, every 10 minutes
+          Upload timeline — 7 slots from 18:30 to 19:30 IST, every 10 minutes
         </p>
       </div>
 

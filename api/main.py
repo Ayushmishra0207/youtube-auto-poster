@@ -507,8 +507,20 @@ async def upload_generated_video(date: str, index: int):
 @app.post("/api/run")
 async def run_pipeline():
     global _pipeline_proc
+
+    # Cloud mode: pipeline needs moviepy/ffmpeg which aren't installed on Render
+    try:
+        import moviepy  # noqa: F401
+    except ImportError:
+        return {
+            "ok": False,
+            "cloud_mode": True,
+            "message": "Pipeline runs on your local PC — open http://localhost:3000 and click Run Now there.",
+        }
+
     if _pipeline_running():
         return {"ok": False, "message": "Pipeline is already running"}
+
     _pipeline_proc = subprocess.Popen(
         [PYTHON, str(BASE_DIR / "scheduler.py"), "--now"],
         cwd=str(BASE_DIR),

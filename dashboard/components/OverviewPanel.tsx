@@ -132,7 +132,7 @@ export default function OverviewPanel() {
         <StatCard
           icon={<Activity size={18} />}
           label="Upload window"
-          value="06:30–07:30"
+          value="18:30–19:30"
           sub="IST, 7 slots × 10 min"
         />
         <StatCard

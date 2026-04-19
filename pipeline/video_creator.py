@@ -6,6 +6,8 @@ Video structure
 ───────────────
   1. Title card   (5 s, music only)
   2. Sections     (voice duration + 0.8 s tail each)
+               ↳  Each section cycles through multiple Pexels images
+                  (one image sub-clip per query, equal duration split)
   3. Outro CTA    (5 s, music only)
 """
 import os
@@ -98,6 +100,7 @@ def _section_slide(
     bg_path: Optional[str],
     colors: tuple,
 ) -> np.ndarray:
+    """Render one slide frame (heading + narration preview) over a background."""
     if bg_path and os.path.exists(bg_path):
         bg = (Image.open(bg_path).convert("RGBA")
                    .resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS))
@@ -134,7 +137,6 @@ def _outro_card() -> np.ndarray:
     f1   = _load_font(HINDI_FONT_BOLD, 78)
     f2   = _load_font(HINDI_FONT_REGULAR, 48)
 
-    # Proper Hindi Devanagari text
     msg1 = "चैनल को Subscribe करें"
     msg2 = "Like, Share और घंटी दबाना न भूलें!"
 
@@ -161,6 +163,51 @@ def _loop_audio(audio: mpe.AudioFileClip, target_duration: float) -> mpe.AudioFi
     return tiled.subclipped(0, target_duration)
 
 
+# ─── Multi-image section builder ──────────────────────────────────────────────
+
+def _build_section_clip(
+    section: dict,
+    voice_path: str,
+    bg_image_list: list[Optional[str]],
+    color_pair: tuple,
+) -> mpe.VideoClip:
+    """
+    Build a video clip for one section by cycling through multiple background images.
+    The total duration is (voice_duration + 0.8 s tail).
+    Each image gets an equal share of the total duration.
+    """
+    audio = mpe.AudioFileClip(voice_path)
+    total_dur = audio.duration + 0.8
+
+    # Filter out None entries but keep at least one slot (gradient fallback)
+    images = [p for p in bg_image_list if p and os.path.exists(p)]
+    if not images:
+        images = [None]  # will render as gradient
+
+    n = len(images)
+    sub_dur = total_dur / n
+
+    sub_clips: list[mpe.ImageClip] = []
+    for img_path in images:
+        frame = _section_slide(
+            section["heading"],
+            section["narration"],
+            img_path,
+            color_pair,
+        )
+        sub_clips.append(
+            mpe.ImageClip(frame).with_duration(sub_dur).with_fps(VIDEO_FPS)
+        )
+
+    # Concatenate sub-clips, then attach audio
+    if len(sub_clips) == 1:
+        section_video = sub_clips[0]
+    else:
+        section_video = mpe.concatenate_videoclips(sub_clips, method="compose")
+
+    return section_video.with_audio(audio)
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def create_thumbnail(script: dict, output_path: str) -> str:
@@ -184,12 +231,25 @@ def create_thumbnail(script: dict, output_path: str) -> str:
 def create_video(
     script: dict,
     voice_files: list[str],
-    bg_images: list[Optional[str]],
+    bg_images: list[list[Optional[str]]],
     output_path: str,
 ) -> str:
-    """Render the complete video and write to output_path."""
+    """
+    Render the complete video and write to output_path.
+
+    bg_images: list[list[str|None]] — one inner list per section,
+               each inner list contains paths to multiple background images
+               that will be cycled through during that section.
+               (Backward-compat: a flat list[str|None] is also accepted and
+               wrapped automatically so old callers don't break.)
+    """
     sections = script["sections"]
-    clips: list[mpe.ImageClip] = []
+
+    # Backward-compat: if caller passes flat list[str|None], wrap each item
+    if bg_images and not isinstance(bg_images[0], list):
+        bg_images = [[img] for img in bg_images]  # type: ignore[assignment]
+
+    clips: list[mpe.VideoClip] = []
 
     # ── 1. Title card (5 s, no voice) ────────────────────────────────────────
     title_arr = _title_card(
@@ -202,29 +262,20 @@ def create_video(
     )
 
     # ── 2. Content sections ───────────────────────────────────────────────────
-    for i, (section, vpath, bgpath) in enumerate(
-        zip(sections, voice_files, bg_images)
-    ):
+    for i, (section, vpath) in enumerate(zip(sections, voice_files)):
         if not vpath or not os.path.exists(vpath):
             log.warning("Skipping section %d — no voice file", i + 1)
             continue
 
-        audio = mpe.AudioFileClip(vpath)
-        dur   = audio.duration + 0.8
+        # Get the image list for this section (safe default = [None])
+        img_list: list[Optional[str]] = (
+            bg_images[i] if i < len(bg_images) else [None]
+        )
 
-        frame = _section_slide(
-            section["heading"],
-            section["narration"],
-            bgpath,
-            SLIDE_COLORS[(i + 1) % len(SLIDE_COLORS)],
-        )
-        clip = (
-            mpe.ImageClip(frame)
-            .with_duration(dur)
-            .with_fps(VIDEO_FPS)
-            .with_audio(audio)
-        )
-        clips.append(clip)
+        color_pair = SLIDE_COLORS[(i + 1) % len(SLIDE_COLORS)]
+
+        section_clip = _build_section_clip(section, vpath, img_list, color_pair)
+        clips.append(section_clip)
 
     # ── 3. Outro (5 s, no voice) ──────────────────────────────────────────────
     clips.append(
