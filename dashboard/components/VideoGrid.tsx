@@ -3,48 +3,125 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { VideoMeta, VideoScript } from "@/lib/types";
-import { Play, Image as ImageIcon, FileJson, X, ChevronDown } from "lucide-react";
+import { Play, Image as ImageIcon, FileJson, X, Upload, ExternalLink, CheckCircle } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const VideoPreview = dynamic(() => import("./VideoPreview"), { ssr: false });
 
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 function StatusBadge({ status }: { status: VideoMeta["status"] }) {
-  const map: Record<string, string> = {
-    ready: "badge-ready",
-    rendering: "badge-rendering",
-    generating: "badge-generating",
-    pending: "badge-pending",
-    failed: "badge-failed",
+  const map: Record<string, { cls: string; label: string }> = {
+    ready:      { cls: "badge-ready",      label: "Ready" },
+    uploaded:   { cls: "badge-uploaded",   label: "Uploaded" },
+    rendering:  { cls: "badge-rendering",  label: "Rendering…" },
+    generating: { cls: "badge-generating", label: "Generating…" },
+    pending:    { cls: "badge-pending",    label: "Pending" },
+    failed:     { cls: "badge-failed",     label: "Failed" },
   };
-  const labels: Record<string, string> = {
-    ready: "Ready", rendering: "Rendering…", generating: "Generating…",
-    pending: "Pending", failed: "Failed",
+  const { cls, label } = map[status] ?? { cls: "badge-pending", label: status };
+  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
+}
+
+function UploadButton({
+  video,
+  onUploaded,
+}: {
+  video: VideoMeta;
+  onUploaded: (index: number, videoId: string, url: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr]             = useState("");
+
+  const handle = async () => {
+    setUploading(true);
+    setErr("");
+    try {
+      const res  = await fetch(`${BASE}/api/upload-generated/${video.date}/${video.index}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Upload failed");
+      onUploaded(video.index, data.video_id, data.url);
+    } catch (e: any) {
+      setErr(e.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
   };
+
+  if (video.status === "uploaded" && video.youtube_url) {
+    return (
+      <a
+        href={video.youtube_url}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center transition-all"
+        style={{ background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#4ade80" }}
+      >
+        <CheckCircle size={12} />
+        View on YouTube
+        <ExternalLink size={10} />
+      </a>
+    );
+  }
+
+  if (!video.has_video) return null;
+
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[status] ?? "badge-pending"}`}>
-      {labels[status] ?? status}
-    </span>
+    <div className="space-y-1">
+      <button
+        onClick={handle}
+        disabled={uploading}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium w-full justify-center transition-all disabled:opacity-50"
+        style={{
+          background: uploading ? "rgba(79,195,247,0.06)" : "rgba(79,195,247,0.1)",
+          border: "1px solid rgba(79,195,247,0.25)",
+          color: "#4FC3F7",
+        }}
+      >
+        {uploading ? (
+          <>
+            <div className="w-3 h-3 border border-cyan-400 border-t-transparent rounded-full animate-spin" />
+            Uploading…
+          </>
+        ) : (
+          <>
+            <Upload size={12} />
+            Upload to YouTube
+          </>
+        )}
+      </button>
+      {err && <p className="text-[10px] text-center text-red-400 leading-tight">{err}</p>}
+    </div>
   );
 }
 
-function VideoCard({ video, onPlay }: { video: VideoMeta; onPlay: (v: VideoMeta) => void }) {
+function VideoCard({
+  video,
+  onPlay,
+  onUploaded,
+}: {
+  video: VideoMeta;
+  onPlay: (v: VideoMeta) => void;
+  onUploaded: (index: number, videoId: string, url: string) => void;
+}) {
   return (
-    <div className="glass glass-hover rounded-2xl overflow-hidden transition-all duration-200 group">
+    <div className="glass glass-hover rounded-2xl overflow-hidden transition-all duration-200 group flex flex-col">
       {/* Thumbnail */}
       <div
-        className="relative h-36 bg-navy-900 flex items-center justify-center overflow-hidden"
+        className="relative h-36 flex items-center justify-center overflow-hidden"
         style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)" }}
       >
         {video.has_thumbnail ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={`http://localhost:8000${video.thumbnail_url}`}
+            src={`${BASE}${video.thumbnail_url}`}
             alt={video.title_english || video.title}
             className="w-full h-full object-cover"
           />
         ) : (
           <ImageIcon size={32} style={{ color: "rgba(79,195,247,0.3)" }} />
         )}
+
         {/* Slot badge */}
         <div
           className="absolute top-2 left-2 text-xs px-2 py-0.5 rounded font-mono font-semibold"
@@ -52,6 +129,18 @@ function VideoCard({ video, onPlay }: { video: VideoMeta; onPlay: (v: VideoMeta)
         >
           {video.slot}
         </div>
+
+        {/* Uploaded overlay badge */}
+        {video.status === "uploaded" && (
+          <div
+            className="absolute top-2 right-2 flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold"
+            style={{ background: "rgba(34,197,94,0.85)", color: "white", backdropFilter: "blur(4px)" }}
+          >
+            <CheckCircle size={9} />
+            Live
+          </div>
+        )}
+
         {/* Play overlay */}
         {video.has_video && (
           <button
@@ -70,15 +159,15 @@ function VideoCard({ video, onPlay }: { video: VideoMeta; onPlay: (v: VideoMeta)
       </div>
 
       {/* Info */}
-      <div className="p-4 space-y-2">
+      <div className="p-4 space-y-2 flex-1 flex flex-col">
         <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-medium text-white leading-snug line-clamp-2">{video.title}</p>
+          <p className="text-sm font-medium text-white leading-snug line-clamp-2 flex-1">{video.title}</p>
           <StatusBadge status={video.status} />
         </div>
         {video.title_english && (
           <p className="text-xs line-clamp-1" style={{ color: "var(--muted)" }}>{video.title_english}</p>
         )}
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex items-center gap-2">
           <span className="text-xs font-mono" style={{ color: "#64748b" }}>#{video.index}</span>
           {video.has_script && (
             <span className="text-xs" style={{ color: "rgba(79,195,247,0.6)" }}>
@@ -86,15 +175,20 @@ function VideoCard({ video, onPlay }: { video: VideoMeta; onPlay: (v: VideoMeta)
             </span>
           )}
         </div>
+
+        {/* Upload / YouTube button */}
+        <div className="mt-auto pt-2">
+          <UploadButton video={video} onUploaded={onUploaded} />
+        </div>
       </div>
     </div>
   );
 }
 
 export default function VideoGrid() {
-  const [videos, setVideos] = useState<VideoMeta[]>([]);
+  const [videos, setVideos]   = useState<VideoMeta[]>([]);
   const [playing, setPlaying] = useState<VideoMeta | null>(null);
-  const [script, setScript] = useState<VideoScript | null>(null);
+  const [script, setScript]   = useState<VideoScript | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -102,6 +196,16 @@ export default function VideoGrid() {
     const id = setInterval(() => api.videos().then((r: any) => setVideos(r.videos)), 10000);
     return () => clearInterval(id);
   }, []);
+
+  const handleUploaded = (index: number, videoId: string, url: string) => {
+    setVideos((prev) =>
+      prev.map((v) =>
+        v.index === index
+          ? { ...v, status: "uploaded", youtube_id: videoId, youtube_url: url }
+          : v
+      )
+    );
+  };
 
   const openPlayer = async (v: VideoMeta) => {
     setPlaying(v);
@@ -123,13 +227,18 @@ export default function VideoGrid() {
     );
   }
 
+  const uploaded  = videos.filter((v) => v.status === "uploaded").length;
+  const ready     = videos.filter((v) => v.status === "ready").length;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-white">Videos</h1>
-        <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-          {videos.length} video{videos.length !== 1 ? "s" : ""} generated today
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Videos</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
+            {videos.length} generated · {uploaded} uploaded · {ready} ready to upload
+          </p>
+        </div>
       </div>
 
       {videos.length === 0 ? (
@@ -144,7 +253,7 @@ export default function VideoGrid() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {videos.map((v) => (
-            <VideoCard key={v.index} video={v} onPlay={openPlayer} />
+            <VideoCard key={v.index} video={v} onPlay={openPlayer} onUploaded={handleUploaded} />
           ))}
         </div>
       )}
@@ -172,13 +281,26 @@ export default function VideoGrid() {
                   <p className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>{playing.title_english}</p>
                 )}
               </div>
-              <button
-                onClick={closePlayer}
-                className="w-8 h-8 rounded-lg flex items-center justify-center transition-all"
-                style={{ background: "rgba(255,255,255,0.06)", color: "#94a3b8" }}
-              >
-                <X size={15} />
-              </button>
+              <div className="flex items-center gap-2">
+                {playing.youtube_url && (
+                  <a
+                    href={playing.youtube_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ background: "rgba(34,197,94,0.12)", color: "#4ade80", border: "1px solid rgba(34,197,94,0.3)" }}
+                  >
+                    <ExternalLink size={11} /> YouTube
+                  </a>
+                )}
+                <button
+                  onClick={closePlayer}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center transition-all"
+                  style={{ background: "rgba(255,255,255,0.06)", color: "#94a3b8" }}
+                >
+                  <X size={15} />
+                </button>
+              </div>
             </div>
 
             {/* Player */}
@@ -188,10 +310,7 @@ export default function VideoGrid() {
 
             {/* Script sections */}
             {script && (
-              <div
-                className="px-6 pb-6 border-t"
-                style={{ borderColor: "var(--border)" }}
-              >
+              <div className="px-6 pb-6 border-t" style={{ borderColor: "var(--border)" }}>
                 <p className="text-xs font-semibold mt-4 mb-3" style={{ color: "var(--muted)" }}>
                   SCRIPT SECTIONS
                 </p>

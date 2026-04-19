@@ -110,6 +110,7 @@ def _tail_log(n: int = 100) -> list[str]:
     return lines[-n:]
 
 def _video_status(vdir: Path) -> str:
+    if (vdir / "youtube_id.txt").exists():  return "uploaded"
     if (vdir / "final.mp4").exists():       return "ready"
     if (vdir / "thumbnail.jpg").exists():   return "rendering"
     if any(vdir.glob("voices/*.mp3")):      return "generating"
@@ -190,6 +191,9 @@ async def list_videos(date: Optional[str] = None):
                 except Exception:
                     pass
             slot = UPLOAD_SLOTS[i] if i < len(UPLOAD_SLOTS) else "—"
+            yt_id_path = vdir / "youtube_id.txt"
+            yt_id  = yt_id_path.read_text().strip() if yt_id_path.exists() else ""
+            yt_url = f"https://youtube.com/watch?v={yt_id}" if yt_id else ""
             videos.append({
                 "index": i + 1,
                 "dir": vdir.name,
@@ -207,6 +211,8 @@ async def list_videos(date: Optional[str] = None):
                 "thumbnail_url": f"/api/videos/{target}/{i+1}/thumbnail",
                 "video_url": f"/api/videos/{target}/{i+1}/video",
                 "script_url": f"/api/videos/{target}/{i+1}/script",
+                "youtube_id": yt_id,
+                "youtube_url": yt_url,
             })
     return {"date": target, "videos": videos}
 
@@ -411,6 +417,89 @@ async def manual_upload(
             os.unlink(tmp_video)
         if tmp_thumb and os.path.exists(tmp_thumb):
             os.unlink(tmp_thumb)
+
+
+# ── Upload a pipeline-generated video to YouTube ───────────────────────────────
+
+@app.post("/api/upload-generated/{date}/{index}")
+async def upload_generated_video(date: str, index: int):
+    """Upload an already-generated pipeline video to YouTube."""
+    vdir       = _video_dir(date, index)
+    video_path = vdir / "final.mp4"
+    thumb_path = vdir / "thumbnail.jpg"
+    script_path= vdir / "script.json"
+    id_file    = vdir / "youtube_id.txt"
+
+    if not video_path.exists():
+        raise HTTPException(404, "Video file not found — generate it first via Run Now.")
+
+    # Read metadata from script.json
+    title = f"Hindi Video {index} | {date}"
+    description = ""
+    tags: list[str] = []
+    category_id = "25"
+
+    if script_path.exists():
+        try:
+            s = json.loads(script_path.read_text(encoding="utf-8"))
+            title       = s.get("title", title)[:100]
+            description = s.get("description", "")[:5000]
+            tags        = [str(t)[:500] for t in s.get("tags", [])[:500]]
+            category_id = "25"
+        except Exception:
+            pass
+
+    try:
+        svc = _get_youtube_service()
+
+        body = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "categoryId": category_id,
+                "defaultLanguage": "hi",
+            },
+            "status": {
+                "privacyStatus": "public",
+                "selfDeclaredMadeForKids": False,
+            },
+        }
+
+        from googleapiclient.http import MediaFileUpload
+        media = MediaFileUpload(
+            str(video_path), mimetype="video/mp4",
+            resumable=True, chunksize=10 * 1024 * 1024,
+        )
+        req = svc.videos().insert(part="snippet,status", body=body, media_body=media)
+
+        response = None
+        while response is None:
+            _, response = req.next_chunk()
+
+        video_id = response["id"]
+        id_file.write_text(video_id, encoding="utf-8")  # persist for status tracking
+
+        # Thumbnail
+        if thumb_path.exists():
+            try:
+                svc.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(str(thumb_path), mimetype="image/jpeg"),
+                ).execute()
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "url": f"https://youtube.com/watch?v={video_id}",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {e}")
 
 
 # ── Pipeline trigger ────────────────────────────────────────────────────────────

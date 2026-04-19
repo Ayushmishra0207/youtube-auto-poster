@@ -18,13 +18,15 @@ export interface VideoMeta {
   tags: string[];
   thumbnail_text: string;
   slot: string;
-  status: "ready" | "rendering" | "generating" | "pending" | "failed";
+  status: "ready" | "uploaded" | "rendering" | "generating" | "pending" | "failed";
   has_video: boolean;
   has_thumbnail: boolean;
   has_script: boolean;
   thumbnail_url: string;
   video_url: string;
   script_url: string;
+  youtube_id: string;
+  youtube_url: string;
 }
 
 export interface VideoScript {
