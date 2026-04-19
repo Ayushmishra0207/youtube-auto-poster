@@ -27,13 +27,15 @@ import base64
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -325,6 +327,90 @@ async def get_analytics():
         raise
     except Exception as e:
         raise HTTPException(500, f"YouTube API error: {e}")
+
+
+# ── Manual Upload ──────────────────────────────────────────────────────────────
+
+@app.post("/api/upload")
+async def manual_upload(
+    video:         UploadFile        = File(...),
+    title:         str               = Form(...),
+    description:   str               = Form(""),
+    tags:          str               = Form(""),
+    category_id:   str               = Form("25"),
+    privacy:       str               = Form("public"),
+    schedule_time: Optional[str]     = Form(None),
+    thumbnail:     Optional[UploadFile] = File(None),
+):
+    """Upload a video file directly to YouTube with metadata."""
+    tmp_video = None
+    tmp_thumb = None
+    try:
+        svc = _get_youtube_service()
+
+        # Stream video to a temp file (avoids loading entire file into RAM)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
+            shutil.copyfileobj(video.file, f)
+            tmp_video = f.name
+
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+
+        body: dict = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tag_list,
+                "categoryId": category_id,
+                "defaultLanguage": "hi",
+            },
+            "status": {
+                "privacyStatus": "private" if schedule_time else privacy,
+                "selfDeclaredMadeForKids": False,
+            },
+        }
+        if schedule_time:
+            body["status"]["publishAt"] = schedule_time
+
+        from googleapiclient.http import MediaFileUpload
+        media = MediaFileUpload(tmp_video, mimetype="video/mp4", resumable=True,
+                                chunksize=10 * 1024 * 1024)
+        req = svc.videos().insert(part="snippet,status", body=body, media_body=media)
+
+        response = None
+        while response is None:
+            _, response = req.next_chunk()
+
+        video_id = response["id"]
+
+        # Optional thumbnail
+        if thumbnail:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+                shutil.copyfileobj(thumbnail.file, f)
+                tmp_thumb = f.name
+            try:
+                svc.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(tmp_thumb, mimetype="image/jpeg"),
+                ).execute()
+            except Exception:
+                pass  # thumbnail upload non-critical
+
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "url": f"https://youtube.com/watch?v={video_id}",
+            "studio_url": f"https://studio.youtube.com/video/{video_id}/edit",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {e}")
+    finally:
+        if tmp_video and os.path.exists(tmp_video):
+            os.unlink(tmp_video)
+        if tmp_thumb and os.path.exists(tmp_thumb):
+            os.unlink(tmp_thumb)
 
 
 # ── Pipeline trigger ────────────────────────────────────────────────────────────

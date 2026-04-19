@@ -4,19 +4,98 @@ import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, ListTodo, Film, ScrollText,
   CalendarClock, Settings, Zap, BarChart2, PlaySquare,
+  Upload, Target,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
+
+const DEADLINE = new Date("2026-05-19T00:00:00+05:30"); // IST
+const TOTAL_DAYS = 30;
+
+function useCountdown() {
+  const calc = () => {
+    const now = new Date();
+    const diff = Math.max(0, DEADLINE.getTime() - now.getTime());
+    return {
+      days:    Math.floor(diff / 86400000),
+      hours:   Math.floor((diff % 86400000) / 3600000),
+      minutes: Math.floor((diff % 3600000)  / 60000),
+      seconds: Math.floor((diff % 60000)    / 1000),
+      pct:     Math.min(100, ((TOTAL_DAYS * 86400000 - diff) / (TOTAL_DAYS * 86400000)) * 100),
+    };
+  };
+  const [t, setT] = useState(calc);
+  useEffect(() => {
+    const id = setInterval(() => setT(calc()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return t;
+}
 
 const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "overview",   label: "Overview",   icon: <LayoutDashboard size={18} /> },
   { id: "analytics",  label: "Analytics",  icon: <BarChart2 size={18} /> },
   { id: "topics",     label: "Topics",     icon: <ListTodo size={18} /> },
   { id: "videos",     label: "Videos",     icon: <Film size={18} /> },
+  { id: "upload",     label: "Upload",     icon: <Upload size={18} /> },
   { id: "logs",       label: "Logs",       icon: <ScrollText size={18} /> },
   { id: "schedule",   label: "Schedule",   icon: <CalendarClock size={18} /> },
   { id: "settings",   label: "Settings",   icon: <Settings size={18} /> },
 ];
+
+function MonetizationFooter() {
+  const { days, hours, minutes, seconds, pct } = useCountdown();
+  const urgent = days < 7;
+  const warn   = days < 15;
+  const accent = urgent ? "#f87171" : warn ? "#fbbf24" : "#4FC3F7";
+
+  return (
+    <div
+      className="mx-3 mb-3 rounded-xl p-3 space-y-2"
+      style={{
+        background: `rgba(${urgent ? "239,68,68" : warn ? "251,191,36" : "79,195,247"},0.06)`,
+        border: `1px solid rgba(${urgent ? "239,68,68" : warn ? "251,191,36" : "79,195,247"},0.2)`,
+      }}
+    >
+      <div className="flex items-center gap-1.5">
+        <Target size={12} style={{ color: accent }} />
+        <p className="text-xs font-semibold" style={{ color: accent }}>Monetization Deadline</p>
+      </div>
+
+      {/* Big countdown */}
+      <div className="flex items-end gap-1">
+        <span className="text-2xl font-bold tabular-nums" style={{ color: accent }}>{days}</span>
+        <span className="text-xs mb-0.5" style={{ color: accent }}>d</span>
+        <span className="text-lg font-bold tabular-nums ml-1" style={{ color: accent, opacity: 0.8 }}>{String(hours).padStart(2,"0")}</span>
+        <span className="text-xs mb-0.5" style={{ color: accent, opacity: 0.8 }}>h</span>
+        <span className="text-lg font-bold tabular-nums" style={{ color: accent, opacity: 0.6 }}>{String(minutes).padStart(2,"0")}</span>
+        <span className="text-xs mb-0.5" style={{ color: accent, opacity: 0.6 }}>m</span>
+        <span className="text-base font-bold tabular-nums" style={{ color: accent, opacity: 0.4 }}>{String(seconds).padStart(2,"0")}</span>
+        <span className="text-xs mb-0.5" style={{ color: accent, opacity: 0.4 }}>s</span>
+      </div>
+
+      {/* Progress bar — time elapsed */}
+      <div>
+        <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
+          <div
+            className="h-full rounded-full transition-all duration-1000"
+            style={{ width: `${pct}%`, background: accent, boxShadow: `0 0 6px ${accent}66` }}
+          />
+        </div>
+        <div className="flex justify-between mt-1">
+          <p className="text-[10px]" style={{ color: "var(--muted)" }}>Apr 19</p>
+          <p className="text-[10px]" style={{ color: "var(--muted)" }}>May 19, 2026</p>
+        </div>
+      </div>
+
+      {/* Targets */}
+      <div className="pt-0.5 space-y-0.5">
+        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Need: 1,000 subs · 4,000 watch hrs</p>
+        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 02:30 IST · Upload 06:30–07:30</p>
+      </div>
+    </div>
+  );
+}
 
 export default function Sidebar({
   active, onSelect,
@@ -113,17 +192,8 @@ export default function Sidebar({
         })}
       </nav>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t" style={{ borderColor: "var(--border)" }}>
-        <p className="text-xs" style={{ color: "var(--muted)" }}>
-          Pipeline fires at{" "}
-          <span className="font-mono" style={{ color: "#4FC3F7" }}>02:30 IST</span>
-        </p>
-        <p className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
-          Uploads{" "}
-          <span className="font-mono text-[11px]" style={{ color: "#94a3b8" }}>06:30–07:30</span>
-        </p>
-      </div>
+      {/* Monetization countdown footer */}
+      <MonetizationFooter />
     </aside>
   );
 }

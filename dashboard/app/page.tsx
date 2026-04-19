@@ -9,8 +9,9 @@ import VideoGrid from "@/components/VideoGrid";
 import LogViewer from "@/components/LogViewer";
 import ScheduleTimeline from "@/components/ScheduleTimeline";
 import SettingsPanel from "@/components/SettingsPanel";
+import UploadPanel from "@/components/UploadPanel";
 
-export type Tab = "overview" | "analytics" | "topics" | "videos" | "logs" | "schedule" | "settings";
+export type Tab = "overview" | "analytics" | "topics" | "videos" | "upload" | "logs" | "schedule" | "settings";
 
 export default function Dashboard() {
   const [tab, setTab] = useState<Tab>("overview");
@@ -25,6 +26,7 @@ export default function Dashboard() {
           {tab === "analytics"  && <AnalyticsPanel />}
           {tab === "topics"     && <TopicsPanel />}
           {tab === "videos"     && <VideoGrid />}
+          {tab === "upload"     && <UploadPanel />}
           {tab === "logs"       && <LogViewer />}
           {tab === "schedule"   && <ScheduleTimeline />}
           {tab === "settings"   && <SettingsPanel />}
