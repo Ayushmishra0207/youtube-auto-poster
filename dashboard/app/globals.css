@@ -60,6 +60,10 @@ html, body {
 .badge-pending  { background: rgba(100,116,139,0.12); color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
 .badge-failed   { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
 
+/* Hide scrollbar (mobile nav) */
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
 /* Log colors */
 .log-info    { color: #94a3b8; }
 .log-warning { color: #fbbf24; }

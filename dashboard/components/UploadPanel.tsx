@@ -303,7 +303,7 @@ export default function UploadPanel() {
         </Field>
 
         {/* Category + Privacy */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Category" icon={<Hash size={12} />}>
             <StyledSelect value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
               {CATEGORIES.map((c) => (

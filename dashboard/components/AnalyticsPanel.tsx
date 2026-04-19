@@ -156,27 +156,29 @@ export default function AnalyticsPanel() {
 
       {/* Channel header card */}
       {channel && (
-        <div className="glass rounded-2xl p-5 flex items-center gap-5"
+        <div className="glass rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4"
           style={{ border: "1px solid rgba(79,195,247,0.15)" }}>
-          {channel.thumbnail && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={channel.thumbnail} alt={channel.title}
-              className="w-14 h-14 rounded-full object-cover"
-              style={{ border: "2px solid rgba(79,195,247,0.3)" }} />
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="text-lg font-bold text-white">{channel.title}</p>
-            {channel.description && (
-              <p className="text-xs mt-0.5 line-clamp-1" style={{ color: "var(--muted)" }}>
-                {channel.description}
-              </p>
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            {channel.thumbnail && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={channel.thumbnail} alt={channel.title}
+                className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover shrink-0"
+                style={{ border: "2px solid rgba(79,195,247,0.3)" }} />
             )}
-            <p className="text-xs mt-1 font-mono" style={{ color: "#4FC3F7" }}>
-              youtube.com/channel/{channel.id}
-            </p>
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-bold text-white truncate">{channel.title}</p>
+              {channel.description && (
+                <p className="text-xs mt-0.5 line-clamp-1" style={{ color: "var(--muted)" }}>
+                  {channel.description}
+                </p>
+              )}
+              <p className="text-xs mt-1 font-mono truncate" style={{ color: "#4FC3F7" }}>
+                youtube.com/channel/{channel.id}
+              </p>
+            </div>
           </div>
           <a href={`https://studio.youtube.com`} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all self-start sm:self-auto shrink-0"
             style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#f87171" }}>
             <ExternalLink size={11} />
             YouTube Studio
@@ -262,69 +264,70 @@ export default function AnalyticsPanel() {
           ) : (
             videos.map((v) => (
               <div key={v.id}
-                className="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] transition-colors group">
+                className="flex items-center gap-3 px-4 sm:px-5 py-3 hover:bg-white/[0.02] transition-colors group">
                 {/* Thumbnail */}
-                <div className="w-20 h-12 rounded-lg overflow-hidden shrink-0"
+                <a href={v.url} target="_blank" rel="noopener noreferrer"
+                  className="w-16 sm:w-20 h-10 sm:h-12 rounded-lg overflow-hidden shrink-0 block"
                   style={{ background: "rgba(255,255,255,0.04)" }}>
                   {v.thumbnail ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={v.thumbnail} alt={v.title} className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
-                      <Film size={16} style={{ color: "rgba(79,195,247,0.3)" }} />
+                      <Film size={14} style={{ color: "rgba(79,195,247,0.3)" }} />
                     </div>
                   )}
-                </div>
+                </a>
 
                 {/* Title + date */}
                 <div className="flex-1 min-w-0">
                   <a href={v.url} target="_blank" rel="noopener noreferrer"
-                    className="text-sm font-medium line-clamp-1 hover:underline text-white transition-colors"
+                    className="text-xs sm:text-sm font-medium line-clamp-2 sm:line-clamp-1 hover:underline text-white transition-colors"
                     style={{ textDecorationColor: "#4FC3F7" }}>
                     {v.title}
                   </a>
-                  <div className="flex items-center gap-2 mt-0.5">
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                     <span className="text-xs" style={{ color: "var(--muted)" }}>
                       {new Date(v.published_at).toLocaleDateString("en-IN", {
-                        day: "numeric", month: "short", year: "numeric"
+                        day: "numeric", month: "short",
                       })}
                     </span>
-                    <span className="text-xs px-1.5 py-0.5 rounded flex items-center gap-1"
+                    <span className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5"
                       style={{
                         background: v.privacy === "public" ? "rgba(34,197,94,0.1)" : "rgba(100,116,139,0.1)",
                         color: v.privacy === "public" ? "#4ade80" : "#94a3b8",
                       }}>
-                      {v.privacy === "public" ? <Globe size={9} /> : <Lock size={9} />}
+                      {v.privacy === "public" ? <Globe size={8} /> : <Lock size={8} />}
                       {v.privacy}
                     </span>
                   </div>
                 </div>
 
-                {/* Stats */}
-                <div className="flex items-center gap-5 shrink-0">
+                {/* Stats — compact on mobile */}
+                <div className="flex items-center gap-3 sm:gap-5 shrink-0">
                   <div className="text-right">
-                    <div className="flex items-center gap-1 text-sm font-semibold text-white">
-                      <Eye size={13} style={{ color: "#4FC3F7" }} />
+                    <div className="flex items-center gap-1 text-xs sm:text-sm font-semibold text-white">
+                      <Eye size={11} style={{ color: "#4FC3F7" }} />
                       {fmt(v.views)}
                     </div>
-                    <p className="text-xs" style={{ color: "var(--muted)" }}>views</p>
+                    <p className="text-[10px] hidden sm:block" style={{ color: "var(--muted)" }}>views</p>
                   </div>
-                  <div className="text-right">
+                  <div className="hidden sm:block text-right">
                     <div className="flex items-center gap-1 text-sm font-semibold text-white">
-                      <ThumbsUp size={12} style={{ color: "#34D399" }} />
+                      <ThumbsUp size={11} style={{ color: "#34D399" }} />
                       {fmt(v.likes)}
                     </div>
-                    <p className="text-xs" style={{ color: "var(--muted)" }}>likes</p>
+                    <p className="text-[10px]" style={{ color: "var(--muted)" }}>likes</p>
                   </div>
-                  <div className="text-right hidden md:block">
+                  <div className="hidden md:block text-right">
                     <div className="flex items-center gap-1 text-sm font-semibold text-white">
-                      <MessageSquare size={12} style={{ color: "#818CF8" }} />
+                      <MessageSquare size={11} style={{ color: "#818CF8" }} />
                       {fmt(v.comments)}
                     </div>
-                    <p className="text-xs" style={{ color: "var(--muted)" }}>comments</p>
+                    <p className="text-[10px]" style={{ color: "var(--muted)" }}>comments</p>
                   </div>
                   <a href={v.url} target="_blank" rel="noopener noreferrer"
-                    className="w-7 h-7 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"
+                    className="w-7 h-7 rounded-lg flex items-center justify-center sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                     style={{ background: "rgba(79,195,247,0.1)", color: "#4FC3F7" }}>
                     <ExternalLink size={13} />
                   </a>

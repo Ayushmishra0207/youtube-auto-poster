@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Sidebar from "@/components/Sidebar";
+import MobileHeader from "@/components/MobileHeader";
+import MobileNav from "@/components/MobileNav";
 import OverviewPanel from "@/components/OverviewPanel";
 import AnalyticsPanel from "@/components/AnalyticsPanel";
 import TopicsPanel from "@/components/TopicsPanel";
@@ -18,10 +20,16 @@ export default function Dashboard() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar active={tab} onSelect={setTab} />
+      {/* Sidebar — desktop only */}
+      <div className="hidden md:block">
+        <Sidebar active={tab} onSelect={setTab} />
+      </div>
 
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Mobile top header */}
+        <MobileHeader />
+
+        <div className="max-w-7xl mx-auto px-4 py-5 pb-24 md:px-6 md:py-8 md:pb-8">
           {tab === "overview"   && <OverviewPanel />}
           {tab === "analytics"  && <AnalyticsPanel />}
           {tab === "topics"     && <TopicsPanel />}
@@ -32,6 +40,9 @@ export default function Dashboard() {
           {tab === "settings"   && <SettingsPanel />}
         </div>
       </main>
+
+      {/* Mobile bottom navigation */}
+      <MobileNav active={tab} onSelect={setTab} />
     </div>
   );
 }
