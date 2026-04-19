@@ -56,9 +56,19 @@ _pipeline_proc: Optional[subprocess.Popen] = None
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(title="YouTube Auto-Poster API", version="2.0.0")
 
+_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+# Allow Vercel/custom frontend domain via env var (set in Render)
+_frontend_url = os.environ.get("FRONTEND_URL", "")
+if _frontend_url:
+    _ALLOWED_ORIGINS.append(_frontend_url.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
