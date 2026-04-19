@@ -4,7 +4,7 @@ import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, ListTodo, Film, ScrollText,
   CalendarClock, Settings, Zap, BarChart2, PlaySquare,
-  Upload, Target,
+  Upload, Target, X,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
@@ -98,10 +98,11 @@ function MonetizationFooter() {
 }
 
 export default function Sidebar({
-  active, onSelect,
+  active, onSelect, onClose,
 }: {
   active: Tab;
   onSelect: (t: Tab) => void;
+  onClose?: () => void;
 }) {
   const [running, setRunning] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -138,15 +139,24 @@ export default function Sidebar({
       <div className="px-5 py-5 border-b" style={{ borderColor: "var(--border)" }}>
         <div className="flex items-center gap-2.5">
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
+            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
             style={{ background: "linear-gradient(135deg, #4FC3F7 0%, #7c3aed 100%)" }}
           >
             <PlaySquare size={16} className="text-white" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-white leading-tight">Auto-Poster</p>
             <p className="text-xs" style={{ color: "var(--muted)" }}>@bitnomad1</p>
           </div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="md:hidden w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors hover:bg-white/10"
+              style={{ color: "#64748b" }}
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
       </div>
 

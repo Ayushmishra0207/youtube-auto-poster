@@ -16,18 +16,42 @@ import UploadPanel from "@/components/UploadPanel";
 export type Tab = "overview" | "analytics" | "topics" | "videos" | "upload" | "logs" | "schedule" | "settings";
 
 export default function Dashboard() {
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab]               = useState<Tab>("overview");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const selectTab = (t: Tab) => {
+    setTab(t);
+    setDrawerOpen(false); // close drawer when nav item tapped
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar — desktop only */}
-      <div className="hidden md:block">
-        <Sidebar active={tab} onSelect={setTab} />
+      {/* ── Desktop sidebar (always visible ≥ md) ── */}
+      <div className="hidden md:block shrink-0">
+        <Sidebar active={tab} onSelect={selectTab} />
       </div>
 
-      <main className="flex-1 overflow-y-auto">
-        {/* Mobile top header */}
-        <MobileHeader />
+      {/* ── Mobile drawer backdrop ── */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-40 md:hidden"
+          style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+
+      {/* ── Mobile drawer (slides in from left) ── */}
+      <div
+        className="fixed inset-y-0 left-0 z-50 md:hidden transition-transform duration-300 ease-in-out"
+        style={{ transform: drawerOpen ? "translateX(0)" : "translateX(-100%)" }}
+      >
+        <Sidebar active={tab} onSelect={selectTab} onClose={() => setDrawerOpen(false)} />
+      </div>
+
+      {/* ── Main content ── */}
+      <main className="flex-1 overflow-y-auto min-w-0">
+        {/* Mobile sticky top bar with hamburger */}
+        <MobileHeader onMenuClick={() => setDrawerOpen(true)} />
 
         <div className="max-w-7xl mx-auto px-4 py-5 pb-24 md:px-6 md:py-8 md:pb-8">
           {tab === "overview"   && <OverviewPanel />}
@@ -41,8 +65,8 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* Mobile bottom navigation */}
-      <MobileNav active={tab} onSelect={setTab} />
+      {/* ── Mobile bottom navigation ── */}
+      <MobileNav active={tab} onSelect={selectTab} />
     </div>
   );
 }

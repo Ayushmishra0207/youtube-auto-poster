@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { PlaySquare, Zap, Target } from "lucide-react";
+import { PlaySquare, Zap, Target, Menu } from "lucide-react";
 import { api } from "@/lib/api";
 
 const DEADLINE = new Date("2026-05-19T00:00:00+05:30");
 
-export default function MobileHeader() {
+export default function MobileHeader({ onMenuClick }: { onMenuClick?: () => void }) {
   const [running,    setRunning]    = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [daysLeft,   setDaysLeft]   = useState(30);
@@ -42,8 +42,15 @@ export default function MobileHeader() {
       className="md:hidden flex items-center justify-between px-4 py-3 border-b sticky top-0 z-30"
       style={{ background: "rgba(8,12,24,0.98)", borderColor: "var(--border)", backdropFilter: "blur(16px)" }}
     >
-      {/* Logo */}
+      {/* Hamburger + Logo */}
       <div className="flex items-center gap-2">
+        <button
+          onClick={onMenuClick}
+          className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors hover:bg-white/10"
+          style={{ color: "#94a3b8" }}
+        >
+          <Menu size={18} />
+        </button>
         <div
           className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
           style={{ background: "linear-gradient(135deg, #4FC3F7 0%, #7c3aed 100%)" }}
