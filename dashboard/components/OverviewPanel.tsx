@@ -52,9 +52,11 @@ function LogLine({ line }: { line: string }) {
 export default function OverviewPanel() {
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [dots, setDots] = useState(".");
 
-  const refresh = async () => {
+  const refresh = async (isFirst = false) => {
     try {
       const [s, l] = await Promise.all([api.status(), api.logs(20)]);
       setStatus(s as PipelineStatus);
@@ -62,22 +64,62 @@ export default function OverviewPanel() {
       setError(false);
     } catch {
       setError(true);
+    } finally {
+      if (isFirst) setLoading(false);
     }
   };
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 5000);
+    refresh(true);
+    const id = setInterval(() => refresh(false), 5000);
     return () => clearInterval(id);
   }, []);
 
-  if (!status) {
+  // Animate dots while loading
+  useEffect(() => {
+    if (!loading) return;
+    const id = setInterval(() => setDots(d => d.length >= 3 ? "." : d + "."), 500);
+    return () => clearInterval(id);
+  }, [loading]);
+
+  if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-6 h-6 border-2 border-cyan-DEFAULT border-t-transparent rounded-full animate-spin" />
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <div
+          className="w-10 h-10 rounded-full border-2 border-t-transparent animate-spin"
+          style={{ borderColor: "#4FC3F7", borderTopColor: "transparent" }}
+        />
+        <div className="text-center space-y-1">
+          <p className="text-sm font-medium text-white">Connecting to API{dots}</p>
+          <p className="text-xs" style={{ color: "var(--muted)" }}>
+            Server may be waking up — this can take up to 30s
+          </p>
+        </div>
       </div>
     );
   }
+
+  if (error && !status) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <div className="text-center space-y-2">
+          <p className="text-sm font-medium" style={{ color: "#f87171" }}>Cannot reach API server</p>
+          <p className="text-xs" style={{ color: "var(--muted)" }}>
+            Check that the Render backend is running
+          </p>
+        </div>
+        <button
+          onClick={() => { setLoading(true); refresh(true); }}
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+          style={{ background: "rgba(79,195,247,0.1)", border: "1px solid rgba(79,195,247,0.3)", color: "#4FC3F7" }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!status) return null;
 
   return (
     <div className="space-y-8">
