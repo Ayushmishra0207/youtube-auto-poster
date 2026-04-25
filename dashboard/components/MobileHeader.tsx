@@ -30,7 +30,11 @@ export default function MobileHeader({ onMenuClick }: { onMenuClick?: () => void
   const handleRun = async () => {
     if (running || triggering) return;
     setTriggering(true);
-    try { await api.run(); setRunning(true); } finally { setTriggering(false); }
+    try {
+      const res: any = await api.run();
+      if (res?.ok !== false) setRunning(true);
+    } catch {}
+    finally { setTriggering(false); }
   };
 
   const urgent = daysLeft < 7;

@@ -508,14 +508,12 @@ async def upload_generated_video(date: str, index: int):
 async def run_pipeline():
     global _pipeline_proc
 
-    # Cloud mode: pipeline needs moviepy/ffmpeg which aren't installed on Render
-    try:
-        import moviepy  # noqa: F401
-    except ImportError:
+    # Render sets RENDER=true automatically — pipeline cannot run in cloud
+    if os.environ.get("RENDER"):
         return {
             "ok": False,
             "cloud_mode": True,
-            "message": "Pipeline runs on your local PC — open http://localhost:3000 and click Run Now there.",
+            "message": "Pipeline runs on your local Windows PC. Run 'python scheduler.py --now' locally.",
         }
 
     if _pipeline_running():

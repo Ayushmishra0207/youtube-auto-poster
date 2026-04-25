@@ -106,6 +106,7 @@ export default function Sidebar({
 }) {
   const [running, setRunning] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [runMsg, setRunMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     const poll = async () => {
@@ -122,9 +123,18 @@ export default function Sidebar({
   const handleRun = async () => {
     if (running || triggering) return;
     setTriggering(true);
+    setRunMsg(null);
     try {
-      await api.run();
-      setRunning(true);
+      const res: any = await api.run();
+      if (res?.ok === false) {
+        setRunMsg({ text: res.message ?? "Cannot start pipeline", ok: false });
+      } else {
+        setRunning(true);
+        setRunMsg({ text: "Pipeline started!", ok: true });
+        setTimeout(() => setRunMsg(null), 4000);
+      }
+    } catch (e: any) {
+      setRunMsg({ text: "Failed to reach API", ok: false });
     } finally {
       setTriggering(false);
     }
@@ -178,6 +188,11 @@ export default function Sidebar({
           <Zap size={14} className={running ? "animate-pulse" : ""} />
           {running ? "Pipeline Running…" : triggering ? "Starting…" : "Run Now"}
         </button>
+        {runMsg && (
+          <p className="mt-2 text-[11px] leading-snug text-center px-1" style={{ color: runMsg.ok ? "#4ade80" : "#f87171" }}>
+            {runMsg.text}
+          </p>
+        )}
       </div>
 
       {/* Nav */}
