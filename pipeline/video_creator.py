@@ -100,33 +100,15 @@ def _section_slide(
     bg_path: Optional[str],
     colors: tuple,
 ) -> np.ndarray:
-    """Render one slide frame (heading + narration preview) over a background."""
+    """Render one slide frame — clean full-screen image, no text overlay."""
     if bg_path and os.path.exists(bg_path):
         bg = (Image.open(bg_path).convert("RGBA")
                    .resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS))
-        overlay = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 165))
+        # Very subtle vignette-only overlay so image stays vibrant
+        overlay = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 40))
         bg = Image.alpha_composite(bg, overlay).convert("RGB")
     else:
         bg = Image.fromarray(_gradient(*colors)).convert("RGB")
-
-    draw = ImageDraw.Draw(bg)
-    f_h  = _load_font(HINDI_FONT_BOLD, 68)
-    f_b  = _load_font(HINDI_FONT_REGULAR, 42)
-    PAD  = 90
-    y    = 80
-
-    for line in _wrap(heading, f_h, VIDEO_WIDTH - 2 * PAD)[:2]:
-        draw.text((PAD, y), line, font=f_h, fill=(255, 255, 255),
-                  stroke_width=2, stroke_fill=(0, 0, 0))
-        y += f_h.getbbox(line)[3] + 12
-
-    draw.rectangle([(PAD, y + 10), (VIDEO_WIDTH - PAD, y + 14)], fill=(79, 195, 247))
-    y += 40
-
-    preview = narration[:240] + ("..." if len(narration) > 240 else "")
-    for line in _wrap(preview, f_b, VIDEO_WIDTH - 2 * PAD)[:8]:
-        draw.text((PAD, y), line, font=f_b, fill=(220, 220, 220))
-        y += f_b.getbbox(line)[3] + 14
 
     return np.array(bg)
 

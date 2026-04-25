@@ -2,9 +2,9 @@
   "slots": [
     {"slot": "18:30", "category": "news_india",       "custom_topic": null},
     {"slot": "18:40", "category": "news_world",       "custom_topic": null},
-    {"slot": "18:50", "category": "historical_story", "custom_topic": null},
+    {"slot": "18:50", "category": "famous_story",     "custom_topic": null},
     {"slot": "19:00", "category": "science_tech",     "custom_topic": null},
-    {"slot": "19:10", "category": "cartoon_animation","custom_topic": null},
+    {"slot": "19:10", "category": "historical_story", "custom_topic": null},
     {"slot": "19:20", "category": "sports",           "custom_topic": null},
     {"slot": "19:30", "category": "entertainment",    "custom_topic": null}
   ],
@@ -13,30 +13,55 @@
       "label": "News India",
       "color": "#4FC3F7",
       "description": "Current Indian national news and events",
-      "search_query": "India latest news today",
-      "prompt_style": "factual news reporting, covering major Indian events, politics, economy",
+      "search_query": "India latest news today 2026",
+      "prompt_style": "factual news reporting in 2026, covering major current Indian events, politics, economy happening right now",
       "yt_category_id": "25",
       "fallback_topics": [
-        "India politics news today",
-        "Indian economy latest update",
-        "India government news today",
-        "India state election news",
-        "India social issues news"
+        "India politics news April 2026",
+        "Indian economy 2026 latest update",
+        "India government policy 2026",
+        "India state news today 2026",
+        "India social issues 2026"
       ]
     },
     "news_world": {
       "label": "World News",
       "color": "#818CF8",
       "description": "International news and global events",
-      "search_query": "world news today international breaking",
-      "prompt_style": "international news reporting, covering global events and world affairs in clear Hindi",
+      "search_query": "world news today international 2026",
+      "prompt_style": "international news reporting in 2026, covering current global events and world affairs in clear Hindi",
       "yt_category_id": "25",
       "fallback_topics": [
-        "US news latest today",
-        "World economic news today",
-        "International news breaking",
-        "China news today latest",
-        "Russia Ukraine news update"
+        "US news 2026 latest today",
+        "World economic news 2026",
+        "International relations news 2026",
+        "Middle East news update 2026",
+        "Global climate news 2026"
+      ]
+    },
+    "famous_story": {
+      "label": "Hindi Sahitya",
+      "color": "#C084FC",
+      "description": "Famous Hindi writers and their iconic stories — Premchand, Jaishankar Prasad and more",
+      "search_query": "Premchand Hindi kahani famous story",
+      "prompt_style": "cinematic literary storytelling — narrate this famous Hindi story dramatically in engaging conversational Hindi. Include: the author's background (1-2 sentences), the full story retold with vivid scenes and dialogue, the deeper moral and why this story is immortal in Indian literature. Make listeners feel the emotions. Total narration 8-10 minutes.",
+      "yt_category_id": "27",
+      "fallback_topics": [
+        "Premchand ki kahani Idgah — Hamid aur chimta",
+        "Premchand ki kahani Kafan — Ghisu aur Madhav ki kahani",
+        "Premchand ki kahani Bade Bhai Sahab",
+        "Premchand ki kahani Nasha",
+        "Premchand ki kahani Poos ki Raat",
+        "Premchand ki kahani Namak ka Daroga",
+        "Premchand ki kahani Do Bailon ki Katha",
+        "Premchand ki kahani Sava Ser Gehun",
+        "Premchand ki kahani Thakur ka Kuan",
+        "Premchand ki kahani Shatranj ke Khiladi",
+        "Jaishankar Prasad ki kahani Aakashdeep",
+        "Jaishankar Prasad ki kahani Puraskar",
+        "Jaishankar Prasad ki kahani Madhu",
+        "Suryakant Tripathi Nirala ki kavita aur jeevan",
+        "Mahadevi Verma ki rachna Mera Parivar"
       ]
     },
     "historical_story": {
@@ -44,74 +69,59 @@
       "color": "#F59E0B",
       "description": "Indian and world historical stories and events",
       "search_query": "Indian history story facts interesting",
-      "prompt_style": "engaging historical storytelling, bringing history alive with vivid detail and narrative flow in Hindi",
+      "prompt_style": "engaging historical storytelling, bringing India's history alive with vivid detail and narrative flow in Hindi",
       "yt_category_id": "27",
       "fallback_topics": [
-        "Mughal empire history India",
-        "Ancient India civilization story",
-        "Freedom fighters of India",
-        "Medieval Indian kingdoms history",
-        "Chhatrapati Shivaji Maharaj story"
-      ]
-    },
-    "cartoon_animation": {
-      "label": "Cartoon / Animation",
-      "color": "#34D399",
-      "description": "Animated stories and cartoon content for families",
-      "search_query": "cartoon moral story Hindi kids",
-      "prompt_style": "fun and engaging animated story format with clear moral lessons, imaginative characters, suitable for family viewing in simple Hindi",
-      "yt_category_id": "1",
-      "fallback_topics": [
-        "Moral story for kids Hindi",
-        "Panchatantra stories Hindi",
-        "Animal friendship story Hindi",
-        "Fairy tale story Hindi",
-        "Tenali Raman clever story"
+        "Chhatrapati Shivaji Maharaj ki veer kahani",
+        "Rani Lakshmibai 1857 ka sangharsh",
+        "Chandragupta Maurya ka samrajya",
+        "Maharana Pratap aur Haldighati yuddh",
+        "Subhash Chandra Bose aur Azad Hind Fauj"
       ]
     },
     "science_tech": {
       "label": "Science & Tech",
       "color": "#60A5FA",
       "description": "Science discoveries and technology news",
-      "search_query": "science technology news India discovery",
-      "prompt_style": "science and technology explained in simple clear Hindi, making complex topics accessible to general Indian audience",
+      "search_query": "science technology news India 2026",
+      "prompt_style": "science and technology in 2026 explained in simple clear Hindi, making complex topics accessible to general Indian audience",
       "yt_category_id": "28",
       "fallback_topics": [
-        "ISRO space mission news",
-        "AI technology news India",
-        "Latest technology invention news",
-        "Space science discovery news",
-        "India technology breakthrough news"
+        "ISRO 2026 space mission update",
+        "AI technology India 2026 news",
+        "India technology innovation 2026",
+        "Space science discovery 2026",
+        "India digital revolution 2026"
       ]
     },
     "sports": {
       "label": "Sports",
       "color": "#F97316",
       "description": "Sports news, cricket highlights and updates",
-      "search_query": "India cricket sports news today",
-      "prompt_style": "exciting sports commentary and news reporting in energetic Hindi, making viewers feel the excitement",
+      "search_query": "India cricket sports news 2026",
+      "prompt_style": "exciting sports commentary and news in energetic Hindi, making viewers feel the excitement of the game",
       "yt_category_id": "17",
       "fallback_topics": [
-        "Cricket news India today",
-        "IPL cricket highlights today",
-        "India cricket match news",
-        "Football sports news India",
-        "Sports achievement India news"
+        "IPL 2026 cricket highlights today",
+        "India cricket team news 2026",
+        "India vs cricket match 2026",
+        "Virat Kohli latest news 2026",
+        "India football sports 2026"
       ]
     },
     "entertainment": {
       "label": "Entertainment",
       "color": "#EC4899",
       "description": "Bollywood, OTT, and entertainment news",
-      "search_query": "Bollywood entertainment celebrity news Hindi",
-      "prompt_style": "entertainment news style, covering Bollywood, celebrities, movies and pop culture in engaging conversational Hindi",
+      "search_query": "Bollywood entertainment news 2026",
+      "prompt_style": "entertainment news in 2026 — covering latest Bollywood releases, OTT hits, celebrity news in engaging conversational Hindi",
       "yt_category_id": "24",
       "fallback_topics": [
-        "Bollywood celebrity news today",
-        "New Hindi movie release this week",
-        "OTT web series release today",
-        "Bollywood awards news",
-        "Film industry news today"
+        "Bollywood new movie release 2026",
+        "OTT web series 2026 must watch",
+        "Bollywood celebrity news 2026",
+        "Hindi film box office 2026",
+        "New Bollywood song viral 2026"
       ]
     },
     "health": {
@@ -119,10 +129,10 @@
       "color": "#A78BFA",
       "description": "Health tips, wellness and lifestyle content",
       "search_query": "health tips Hindi wellness India",
-      "prompt_style": "informative health content in simple Hindi with practical actionable tips tailored for Indian audience and lifestyle",
+      "prompt_style": "informative health content in simple Hindi with practical actionable tips for Indian audience and lifestyle",
       "yt_category_id": "26",
       "fallback_topics": [
-        "Health tips in Hindi",
+        "Health tips in Hindi 2026",
         "Yoga benefits for health",
         "Ayurveda home remedies Hindi",
         "Healthy diet tips India",
@@ -133,15 +143,15 @@
       "label": "Finance & Market",
       "color": "#FCD34D",
       "description": "Stock market, business and financial news",
-      "search_query": "India share market finance news today",
-      "prompt_style": "financial news and tips in simple Hindi, explaining markets and money concepts clearly for common people",
+      "search_query": "India share market finance news 2026",
+      "prompt_style": "financial news and tips in simple Hindi, explaining markets and money concepts clearly for common people in 2026",
       "yt_category_id": "25",
       "fallback_topics": [
-        "Share market India news today",
-        "Sensex Nifty update today",
-        "Investment tips for Indians",
-        "Indian economy news today",
-        "Business news India today"
+        "Share market India news 2026",
+        "Sensex Nifty update 2026",
+        "Investment tips for Indians 2026",
+        "Indian economy news 2026",
+        "Business news India today 2026"
       ]
     },
     "spiritual": {
@@ -157,6 +167,21 @@
         "Indian festival significance story",
         "Ramayana story episode",
         "Mahabharata story episode"
+      ]
+    },
+    "cartoon_animation": {
+      "label": "Cartoon / Animation",
+      "color": "#34D399",
+      "description": "Animated stories and cartoon content for families",
+      "search_query": "cartoon moral story Hindi kids",
+      "prompt_style": "fun and engaging animated story format with clear moral lessons, imaginative characters, suitable for family viewing in simple Hindi",
+      "yt_category_id": "1",
+      "fallback_topics": [
+        "Moral story for kids Hindi",
+        "Panchatantra stories Hindi",
+        "Animal friendship story Hindi",
+        "Fairy tale story Hindi",
+        "Tenali Raman clever story"
       ]
     }
   }

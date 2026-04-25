@@ -27,6 +27,7 @@ cached after the first call. Subsequent calls in the same session skip re-encodi
 """
 import json
 import re
+from datetime import datetime
 
 import anthropic
 from json_repair import repair_json
@@ -39,7 +40,7 @@ _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # ── System prompt (cached) ────────────────────────────────────────────────────
 _SYSTEM_PROMPT = """\
-You are a top-tier Hindi YouTube content creator for @bitnomad1 — a channel targeting 1000 subscribers and 4000 watch hours. Your videos must be emotionally engaging, informative, and shareable like viral news content.
+You are a top-tier Hindi YouTube content creator for @bitnomad1 — a channel targeting 1000 subscribers and 4000 watch hours. The current year is 2026. Always write content relevant to 2025-2026. Never reference events as "upcoming" if they already happened. Your videos must be emotionally engaging, informative, and shareable like viral news content.
 
 Your output must be a single valid JSON object — no markdown, no extra text.
 
@@ -147,7 +148,8 @@ def generate_script(topic: str, category_style: str = "") -> dict:
     """Call Claude with a cached system prompt and return the parsed script dict."""
     log.info("Generating script for topic: %s", topic)
 
-    user_content = f'Create a complete video script about: "{topic}"'
+    today = datetime.now().strftime("%d %B %Y")
+    user_content = f'Today\'s date: {today}\n\nCreate a complete video script about: "{topic}"'
     if category_style:
         user_content += f"\n\nContent style: {category_style}"
 
