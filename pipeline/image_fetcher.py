@@ -1,5 +1,5 @@
 """
-Background image pipeline: Gemini Imagen 3 (primary) → Pexels (fallback) → gradient.
+Background image pipeline: HuggingFace (primary) → Gemini (fallback) → Pexels (fallback) → gradient.
 
 fetch_all_section_images() returns list[list[str|None]] — one inner list per
 section, each containing paths to multiple images that video_creator cycles through.
@@ -62,13 +62,23 @@ def fetch_all_section_images(
     Fetch/generate multiple background images per section.
 
     Priority per image slot:
-      1. Gemini Imagen 3 (AI-generated, most relevant)
-      2. Pexels stock photo (real photography fallback)
-      3. None → video_creator uses dark gradient
+      1. HuggingFace FLUX.1-schnell (free AI-generated, most relevant)
+      2. Gemini Imagen 4 (AI-generated fallback)
+      3. Pexels stock photo (real photography fallback)
+      4. None → video_creator uses dark gradient
 
     Returns list[list[str|None]] — outer = sections, inner = images per section.
     """
-    # Import here so Gemini is optional (cloud API server doesn't need it)
+    # Import here so each provider is optional
+    try:
+        from pipeline.image_generator_huggingface import generate_image as hf_img
+        from config import HUGGINGFACE_API_KEY
+        use_hf = bool(HUGGINGFACE_API_KEY)
+    except ImportError:
+        use_hf = False
+        hf_img = None
+        HUGGINGFACE_API_KEY = ""
+
     try:
         from pipeline.image_generator_gemini import generate_image as gemini_img
         from config import GEMINI_API_KEY
@@ -92,22 +102,27 @@ def fetch_all_section_images(
 
         for j, query in enumerate(queries):
             img: str | None = None
+            img_path = os.path.join(output_dir, f"bg_{i:02d}_{j:02d}.jpg")
 
-            # 1. Try Gemini Imagen 3
-            if use_gemini and gemini_img:
-                gemini_path = os.path.join(output_dir, f"bg_{i:02d}_{j:02d}.jpg")
-                img = gemini_img(query, gemini_path)
+            # 1. Try HuggingFace FLUX.1-schnell (free)
+            if use_hf and hf_img:
+                img = hf_img(query, img_path)
+                if img:
+                    log.info("Image %d.%d [huggingface] %s", i + 1, j + 1, query[:45])
+
+            # 2. Fall back to Gemini Imagen 4
+            if not img and use_gemini and gemini_img:
+                img = gemini_img(query, img_path)
                 if img:
                     log.info("Image %d.%d [gemini] %s", i + 1, j + 1, query[:45])
 
-            # 2. Fall back to Pexels
+            # 3. Fall back to Pexels
             if not img:
-                pexels_path = os.path.join(output_dir, f"bg_{i:02d}_{j:02d}.jpg")
-                img = fetch_image_pexels(query, api_key, pexels_path, result_index=j % 3)
+                img = fetch_image_pexels(query, api_key, img_path, result_index=j % 3)
                 if img:
                     log.info("Image %d.%d [pexels]  %s", i + 1, j + 1, query[:45])
 
-            # 3. Log gradient fallback
+            # 4. Log gradient fallback
             if not img:
                 log.info("Image %d.%d [gradient fallback] %s", i + 1, j + 1, query[:45])
 
