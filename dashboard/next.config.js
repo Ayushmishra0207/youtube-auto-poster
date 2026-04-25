@@ -3,8 +3,10 @@ const nextConfig = {
   reactStrictMode: true,
   images: {
     remotePatterns: [
-      { protocol: "http", hostname: "localhost", port: "8000" },
-      { protocol: "http", hostname: "127.0.0.1", port: "8000" },
+      { protocol: "http",  hostname: "localhost",                    port: "8000" },
+      { protocol: "http",  hostname: "127.0.0.1",                   port: "8000" },
+      { protocol: "https", hostname: "*.onrender.com",               port: ""     },
+      { protocol: "https", hostname: "*.vercel.app",                 port: ""     },
     ],
   },
   // Allow Remotion to work in Next.js
