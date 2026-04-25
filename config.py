@@ -21,6 +21,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 ANTHROPIC_API_KEY       = os.getenv("ANTHROPIC_API_KEY", "")
 PEXELS_API_KEY          = os.getenv("PEXELS_API_KEY", "")
 GEMINI_API_KEY          = os.getenv("GEMINI_API_KEY", "")
+HUGGINGFACE_API_KEY     = os.getenv("HUGGINGFACE_API_KEY", "")
 YOUTUBE_CLIENT_SECRETS  = str(BASE_DIR / "client_secrets.json")
 YOUTUBE_TOKEN_FILE      = str(BASE_DIR / "youtube_token.pickle")
 
