@@ -2,21 +2,29 @@ services:
   - type: web
     name: yt-autoposter-api
     runtime: python
-    buildCommand: pip install -r api/requirements.txt
+    buildCommand: pip install -r requirements.txt && pip install -r api/requirements.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     plan: free
     envVars:
       - key: YOUTUBE_TOKEN_B64
-        sync: false          # set manually in Render dashboard
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: PEXELS_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: HUGGINGFACE_API_KEY
+        sync: false
       - key: TOPIC_CONFIG_JSON
-        sync: false          # paste contents of topic_config.json here
+        sync: false
       - key: KEEP_OUTPUT_DAYS
         value: "3"
       - key: TTS_VOICE
         value: "hi-IN-MadhurNeural"
+      - key: TTS_RATE
+        value: "-12%"
+      - key: TTS_PITCH
+        value: "-4Hz"
       - key: PYTHON_VERSION
         value: "3.11.0"

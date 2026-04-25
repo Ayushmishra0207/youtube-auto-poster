@@ -508,14 +508,6 @@ async def upload_generated_video(date: str, index: int):
 async def run_pipeline():
     global _pipeline_proc
 
-    # Render sets RENDER=true automatically — pipeline cannot run in cloud
-    if os.environ.get("RENDER"):
-        return {
-            "ok": False,
-            "cloud_mode": True,
-            "message": "Pipeline runs on your local Windows PC. Run 'python scheduler.py --now' locally.",
-        }
-
     if _pipeline_running():
         return {"ok": False, "message": "Pipeline is already running"}
 
