@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- No test suite or pytest exists in this project. Tests are plain Python scripts under `tests/` using bare `assert` statements, with an `if __name__ == "__main__":` block that calls every test function and prints `All tests passed.` on success. Run with `python tests/test_x.py`; a failed assert raises `AssertionError` and a nonzero exit.
+- No test suite or pytest exists in this project. Tests are plain Python scripts under `tests/` using bare `assert` statements, with an `if __name__ == "__main__":` block that calls every test function and prints `All tests passed.` on success. Running a test script directly (`python tests/test_x.py`) puts `tests/` on `sys.path[0]`, not the repo root, so `from pipeline.script_generator import ...` fails with `ModuleNotFoundError: No module named 'pipeline'`. Always run tests as `PYTHONPATH=. python tests/test_x.py` from the repo root; a failed assert raises `AssertionError` and a nonzero exit.
 - YouTube's total tag-list character limit is 500 characters (joined length, used by `_enrich_metadata`).
 - Video title limit stays ≤100 chars (already enforced in `uploader.py:93`, do not change).
 - All LLM prompts must still produce a single valid JSON object — no markdown, no extra text — matching the existing schema keys. Prompt edits must not change the JSON schema shape.
@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_enrich_metadata.py`
+Run: `PYTHONPATH=. python tests/test_enrich_metadata.py`
 Expected: `ImportError: cannot import name '_enrich_metadata' from 'pipeline.script_generator'`
 
 - [ ] **Step 3: Implement `_enrich_metadata`**
@@ -163,7 +163,7 @@ def _enrich_metadata(script: dict, is_short: bool = False) -> dict:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_enrich_metadata.py`
+Run: `PYTHONPATH=. python tests/test_enrich_metadata.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Commit**
@@ -217,7 +217,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_generate_script_wiring.py`
+Run: `PYTHONPATH=. python tests/test_generate_script_wiring.py`
 Expected: `AssertionError` (tags list is empty — `_enrich_metadata` is not yet called, so no base tags were injected)
 
 - [ ] **Step 3: Wire enrichment into both generators**
@@ -250,7 +250,7 @@ to:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_generate_script_wiring.py`
+Run: `PYTHONPATH=. python tests/test_generate_script_wiring.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Commit**
@@ -310,7 +310,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_longform_prompt_rules.py`
+Run: `PYTHONPATH=. python tests/test_longform_prompt_rules.py`
 Expected: `AssertionError` on `test_title_keyword_placement_rule_present` (current prompt has no "first 40 characters" rule)
 
 - [ ] **Step 3: Rewrite `_SYSTEM_PROMPT`**
@@ -396,7 +396,7 @@ Rules:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_longform_prompt_rules.py`
+Run: `PYTHONPATH=. python tests/test_longform_prompt_rules.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Optional manual quality check (not automated — costs API credit)**
@@ -467,7 +467,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_shorts_prompt_rules.py`
+Run: `PYTHONPATH=. python tests/test_shorts_prompt_rules.py`
 Expected: `AssertionError` on `test_first_line_hook_rule_present`
 
 - [ ] **Step 3: Rewrite `_SHORTS_SYSTEM_PROMPT`**
@@ -523,7 +523,7 @@ RULES:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_shorts_prompt_rules.py`
+Run: `PYTHONPATH=. python tests/test_shorts_prompt_rules.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Optional manual quality check (not automated — costs API credit)**
@@ -605,7 +605,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_chapter_offsets.py`
+Run: `PYTHONPATH=. python tests/test_chapter_offsets.py`
 Expected: `ImportError: cannot import name '_compute_chapter_offsets' from 'pipeline.video_creator'`
 
 - [ ] **Step 3: Implement both functions**
@@ -666,7 +666,7 @@ def _compute_chapter_offsets(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_chapter_offsets.py`
+Run: `PYTHONPATH=. python tests/test_chapter_offsets.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Commit**
@@ -759,7 +759,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_build_chapters.py`
+Run: `PYTHONPATH=. python tests/test_build_chapters.py`
 Expected: `ImportError: cannot import name 'build_chapters' from 'pipeline.video_creator'`
 
 - [ ] **Step 3: Implement `build_chapters`**
@@ -794,7 +794,7 @@ def build_chapters(script: dict, voices: list, title_card_seconds: float = 5.0) 
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_build_chapters.py`
+Run: `PYTHONPATH=. python tests/test_build_chapters.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Commit**
@@ -859,7 +859,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python tests/test_scheduler_chapters.py`
+Run: `PYTHONPATH=. python tests/test_scheduler_chapters.py`
 Expected: `ImportError: cannot import name '_append_chapters_to_description' from 'scheduler'`
 
 - [ ] **Step 3: Add the helper and wire it into `_run_single_video`**
@@ -934,7 +934,7 @@ to:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python tests/test_scheduler_chapters.py`
+Run: `PYTHONPATH=. python tests/test_scheduler_chapters.py`
 Expected: `All tests passed.`
 
 - [ ] **Step 5: Commit**
