@@ -1,21 +1,21 @@
-﻿"""
+"""
 Generate a full Hindi YouTube video script using Claude.
 
 Output schema
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+─────────────
 {
-  "title":           str   â€” Hindi title (â‰¤ 100 chars, SEO-ready)
-  "title_english":   str   â€” English translation of title
-  "description":     str   â€” Hindi YouTube description (~200 words)
-  "tags":            list  â€” mix of Hindi + English tags
-  "thumbnail_text":  str   â€” â‰¤ 6 punchy Hindi words for thumbnail
+  "title":           str   — Hindi title (≤ 100 chars, SEO-ready)
+  "title_english":   str   — English translation of title
+  "description":     str   — Hindi YouTube description (~200 words)
+  "tags":            list  — mix of Hindi + English tags
+  "thumbnail_text":  str   — ≤ 6 punchy Hindi words for thumbnail
   "sections": [
     {
       "id":             int,
-      "heading":        str   â€” section title (Hindi),
-      "narration":      str   â€” full spoken text (60-90 s worth),
-      "key_points":     list  â€” 3 bullet highlights,
-      "image_searches": list  â€” 5 English queries for cycling stock images
+      "heading":        str   — section title (Hindi),
+      "narration":      str   — full spoken text (60-90 s worth),
+      "key_points":     list  — 3 bullet highlights,
+      "image_searches": list  — 5 English queries for cycling stock images
     },
     ...
   ]
@@ -38,11 +38,11 @@ from pipeline.retry import with_retry
 
 _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# â”€â”€ System prompt (cached) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── System prompt (cached) ────────────────────────────────────────────────────
 _SYSTEM_PROMPT = """\
-You are a top-tier Hindi YouTube content creator for @bitnomad1 â€” a channel targeting 1000 subscribers and 4000 watch hours. The current year is 2026. Always write content relevant to 2025-2026. Never reference events as "upcoming" if they already happened. Your videos must be emotionally engaging, informative, and shareable like viral news content.
+You are a top-tier Hindi YouTube content creator for @bitnomad1 — a channel targeting 1000 subscribers and 4000 watch hours. The current year is 2026. Always write content relevant to 2025-2026. Never reference events as "upcoming" if they already happened. Your videos must be emotionally engaging, informative, and shareable like viral news content.
 
-Your output must be a single valid JSON object â€” no markdown, no extra text.
+Your output must be a single valid JSON object — no markdown, no extra text.
 
 JSON schema:
 {
@@ -54,8 +54,8 @@ JSON schema:
   "sections": [
     {
       "id":             1,
-      "heading":        "<section heading in Hindi â€” short, punchy>",
-      "narration":      "<natural conversational Hindi narration â€” see rules below>",
+      "heading":        "<section heading in Hindi — short, punchy>",
+      "narration":      "<natural conversational Hindi narration — see rules below>",
       "key_points":     ["<point 1>", "<point 2>", "<point 3>"],
       "image_searches": ["<English visual query 1>", "<English visual query 2>", "<English visual query 3>", "<English visual query 4>", "<English visual query 5>"]
     }
@@ -67,16 +67,16 @@ NARRATION RULES (critical for natural human-like voice):
 - Use conversational Hindi, not formal/bookish. Like you're talking to a friend.
 - Include emotional hooks: shock, surprise, curiosity, urgency.
 - Add natural pauses by ending sentences with periods. Never write a wall of text.
-- Use rhetorical questions to engage: "à¤•à¥à¤¯à¤¾ à¤†à¤ª à¤œà¤¾à¤¨à¤¤à¥‡ à¤¹à¥ˆà¤‚?", "à¤¸à¥‹à¤šà¤¿à¤ à¤œà¤¼à¤°à¤¾!", "à¤•à¥à¤¯à¤¾ à¤¹à¥‹à¤—à¤¾ à¤…à¤—à¤°?"
+- Use rhetorical questions to engage: "क्या आप जानते हैं?", "सोचिए ज़रा!", "क्या होगा अगर?"
 - Include real numbers, statistics, and specific facts to build credibility.
-- Natural fillers where appropriate: "à¤¦à¥‡à¤–à¤¿à¤", "à¤¦à¤°à¤…à¤¸à¤²", "à¤œà¤¾à¤¨à¤¿à¤", "à¤¸à¥à¤¨à¤¿à¤"
+- Natural fillers where appropriate: "देखिए", "दरअसल", "जानिए", "सुनिए"
 - Every section narration = 70-90 seconds of speech when read aloud at moderate pace.
 
 SECTION STRUCTURE (5-7 sections total):
-- Section 1 = VIRAL HOOK: Start with the most shocking/surprising fact. Use "à¤†à¤œ à¤¹à¤® à¤¬à¤¾à¤¤ à¤•à¤°à¥‡à¤‚à¤—à¥‡..." style. Make viewer commit to watching.
+- Section 1 = VIRAL HOOK: Start with the most shocking/surprising fact. Use "आज हम बात करेंगे..." style. Make viewer commit to watching.
 - Section 2-5 = Main content with facts, stories, explanations. Each section reveals something new.
 - Second-to-last section = Biggest revelation or climax.
-- Last section = Strong CTA: "à¤¦à¥‹à¤¸à¥à¤¤à¥‹à¤‚, à¤…à¤—à¤° à¤¯à¤¹ à¤µà¥€à¤¡à¤¿à¤¯à¥‹ à¤†à¤ªà¤•à¥‹ à¤ªà¤¸à¤‚à¤¦ à¤†à¤ˆ à¤¤à¥‹..." end with "à¤šà¥ˆà¤¨à¤² à¤•à¥‹ like à¤”à¤° subscribe à¤•à¤°à¥‡à¤‚, à¤˜à¤‚à¤Ÿà¥€ à¤¦à¤¬à¤¾à¤¨à¤¾ à¤¨ à¤­à¥‚à¤²à¥‡à¤‚!"
+- Last section = Strong CTA: "दोस्तों, अगर यह वीडियो आपको पसंद आई तो..." end with "चैनल को like और subscribe करें, घंटी दबाना न भूलें!"
 
 IMAGE SEARCHES (5 per section):
 - Each query should show a DIFFERENT visual angle of the section topic.
@@ -85,14 +85,14 @@ IMAGE SEARCHES (5 per section):
 - Examples for a corruption story: ["India parliament building exterior", "Indian politician speech crowd", "money corruption briefcase India", "protest India street crowd", "newspaper India headline printing"]
 
 MONETIZATION FOCUS:
-- Content must maximize WATCH TIME â€” every section must end with a teaser for the next.
-- Use cliffhangers: "à¤²à¥‡à¤•à¤¿à¤¨ à¤…à¤¸à¤²à¥€ à¤¬à¤¾à¤¤ à¤¤à¥‹ à¤†à¤—à¥‡ à¤¹à¥ˆ..." / "à¤…à¤—à¤²à¥‡ à¤¹à¤¿à¤¸à¥à¤¸à¥‡ à¤®à¥‡à¤‚ à¤œà¥‹ à¤¬à¤¾à¤¤ à¤¹à¥ˆ à¤µà¥‹ à¤†à¤ªà¤•à¥‹ à¤¹à¥ˆà¤°à¤¾à¤¨ à¤•à¤° à¤¦à¥‡à¤—à¥€..."
+- Content must maximize WATCH TIME — every section must end with a teaser for the next.
+- Use cliffhangers: "लेकिन असली बात तो आगे है..." / "अगले हिस्से में जो बात है वो आपको हैरान कर देगी..."
 - Topics that work best: controversies, shocking reveals, behind-the-scenes, what-happened-next stories.
 
 Rules:
 - Script must be entirely in Hindi (Devanagari script).
 - CRITICAL: Output must be valid JSON. Do NOT include literal newline characters inside string values. Write each narration as a single continuous string with no line breaks.
-- Total narration â‰ˆ 7â€“9 minutes of speech for better watch time.
+- Total narration ≈ 7–9 minutes of speech for better watch time.
 - Tags: 15-20 mix of Hindi + English, include trending ones.\
 """
 
@@ -141,6 +141,8 @@ def _normalize_image_searches(script: dict) -> dict:
         if not section["image_searches"]:
             section["image_searches"] = ["india news background"]
     return script
+
+
 _BASE_TAGS_LONGFORM = ["bitnomad1", "hindi news", "trending news india"]
 _BASE_TAGS_SHORTS = ["bitnomad1", "hindi news", "shorts"]
 _DEFAULT_HASHTAGS_LONGFORM = ["#Hindi", "#News", "#Trending", "#India"]
@@ -192,7 +194,6 @@ def _enrich_metadata(script: dict, is_short: bool = False) -> dict:
     script["description"] = description
 
     return script
-
 
 
 @with_retry(max_attempts=3, base_delay=5.0, exceptions=(anthropic.APIError, anthropic.APIConnectionError, ValueError))
@@ -251,5 +252,5 @@ def generate_script(topic: str, category_style: str = "") -> dict:
     # Normalize image_searches field (handles old single-string format)
     script = _normalize_image_searches(script)
 
-    log.info("Script ready: %s", script.get("title", "â€”"))
+    log.info("Script ready: %s", script.get("title", "—"))
     return script
