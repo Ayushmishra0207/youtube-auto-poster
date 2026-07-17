@@ -403,7 +403,8 @@ def generate_script(topic: str, category_style: str = "") -> dict:
     if category_style:
         user_content += f"\n\nContent style: {category_style}"
 
-    return _generate_via_chain(user_content, topic, _SYSTEM_PROMPT, required_key="sections")
+    script = _generate_via_chain(user_content, topic, _SYSTEM_PROMPT, required_key="sections")
+    return _enrich_metadata(script, is_short=False)
 
 
 # ── YouTube Shorts scripts ────────────────────────────────────────────────────
@@ -456,4 +457,5 @@ def generate_shorts_script(headlines: list[str], focus: str = "India and world b
         f"Create the Shorts script now."
     )
 
-    return _generate_via_chain(user_content, f"shorts:{focus}", _SHORTS_SYSTEM_PROMPT, required_key="items")
+    script = _generate_via_chain(user_content, f"shorts:{focus}", _SHORTS_SYSTEM_PROMPT, required_key="items")
+    return _enrich_metadata(script, is_short=True)
