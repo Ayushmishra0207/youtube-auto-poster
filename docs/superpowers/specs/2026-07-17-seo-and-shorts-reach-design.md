@@ -88,14 +88,16 @@ in [pipeline/video_creator.py](../../../pipeline/video_creator.py).
   `create_video` already uses), pairing each timestamp with the section's
   Hindi `heading`.
 - YouTube requires the first chapter at 0:00 and each chapter to be at least
-  ~10 seconds, or it silently ignores the whole chapter list. Any section
-  whose slide would produce a chapter shorter than 10s is merged into the
-  previous chapter (its heading is dropped, not shown as its own marker)
-  rather than emitting an invalid list.
+  ~10 seconds, or it silently ignores the whole chapter list. The title card
+  itself (5s) is too short to ever meet that minimum, so it has no chapter
+  of its own — its time is folded into the first section's chapter, which
+  is always forced to start at 0:00. Any later section whose natural start
+  would land less than 10s after the previous kept chapter is merged into
+  that previous chapter (its heading is dropped, not shown as its own
+  marker) rather than emitting an invalid list.
 - Returns a plain text block, e.g.:
   ```
-  0:00 शुरुआत
-  0:05 पहला बड़ा खुलासा
+  0:00 पहला बड़ा खुलासा
   1:32 दूसरा मोड़
   ...
   ```
