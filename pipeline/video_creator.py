@@ -393,6 +393,57 @@ def create_thumbnail(script: dict, output_path: str,
     return output_path
 
 
+def _format_timestamp(total_seconds: float) -> str:
+    """Format seconds as YouTube chapter-marker text: "M:SS"."""
+    total_seconds = max(0, int(round(total_seconds)))
+    m, s = divmod(total_seconds, 60)
+    return f"{m}:{s:02d}"
+
+
+def _compute_chapter_offsets(
+    section_headings: list,
+    section_durations: list,
+    title_card_seconds: float = 5.0,
+    xfade_seconds: float = _XFADE,
+    tail_seconds: float = 0.8,
+    min_chapter_seconds: float = 10.0,
+) -> list:
+    """
+    Pure function: compute chapter (start_seconds, heading) pairs matching
+    create_video's actual clip timeline (title card + non-skipped sections,
+    each transition overlapped by xfade_seconds).
+
+    The title card has no chapter of its own -- it is too short (5s) to ever
+    satisfy min_chapter_seconds, so its time is folded into the first
+    section's chapter, which is always forced to start at 0:00 (YouTube
+    requires the first chapter marker at 0:00). Any later chapter that would
+    start less than min_chapter_seconds after the previous kept chapter is
+    dropped (merged into the previous chapter).
+    """
+    included = [title_card_seconds]
+    kept_headings = []
+    for heading, dur in zip(section_headings, section_durations):
+        if dur:
+            included.append(dur + tail_seconds)
+            kept_headings.append(heading)
+
+    if not kept_headings:
+        return [(0.0, section_headings[0] if section_headings else "")]
+
+    starts = []
+    cum = 0.0
+    for k in range(len(included)):
+        starts.append(cum - k * xfade_seconds)
+        cum += included[k]
+    section_starts = starts[1:]  # one per kept section, in order
+
+    chapters = [(0.0, kept_headings[0])]
+    for heading, start in zip(kept_headings[1:], section_starts[1:]):
+        if start - chapters[-1][0] >= min_chapter_seconds:
+            chapters.append((start, heading))
+    return chapters
+
+
 def create_video(
     script: dict,
     voice_files: list[str],
