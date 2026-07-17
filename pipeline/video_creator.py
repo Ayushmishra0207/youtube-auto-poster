@@ -444,6 +444,31 @@ def _compute_chapter_offsets(
     return chapters
 
 
+def build_chapters(script: dict, voices: list, title_card_seconds: float = 5.0) -> str:
+    """
+    Read each section's real voice-clip duration and format YouTube chapter
+    markers as a plain text block ("M:SS heading" per line). Long-form only
+    — YouTube Shorts do not support chapters.
+    """
+    sections = script.get("sections", [])
+    headings = [s.get("heading", "") for s in sections]
+
+    durations = []
+    for v in voices:
+        if v and os.path.exists(v):
+            try:
+                clip = mpe.AudioFileClip(v)
+                durations.append(clip.duration)
+                clip.close()
+            except Exception:
+                durations.append(None)
+        else:
+            durations.append(None)
+
+    offsets = _compute_chapter_offsets(headings, durations, title_card_seconds=title_card_seconds)
+    return "\n".join(f"{_format_timestamp(t)} {h}" for t, h in offsets)
+
+
 def create_video(
     script: dict,
     voice_files: list[str],
