@@ -47,7 +47,7 @@ from pipeline.script_generator import generate_script, generate_shorts_script
 from pipeline.shorts_creator import create_short
 from pipeline.trends import get_trending_topics
 from pipeline.uploader import upload_thumbnail, upload_video
-from pipeline.video_creator import create_thumbnail, create_video
+from pipeline.video_creator import build_chapters, create_thumbnail, create_video
 from pipeline.voice_generator import generate_section_voices
 
 TOPIC_CONFIG_FILE = BASE_DIR / "topic_config.json"
@@ -233,6 +233,14 @@ def _load_slot_plan() -> list[dict]:
     return plan
 
 
+def _append_chapters_to_description(script: dict, voices: list) -> dict:
+    """Append real YouTube chapter markers to script['description'] in place."""
+    chapters_text = build_chapters(script, voices)
+    if chapters_text.strip():
+        script["description"] = (script.get("description", "") or "").rstrip() + "\n\n" + chapters_text
+    return script
+
+
 def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
                       category_style: str = "", voice_rate: str | None = None) -> dict | None:
     """Full pipeline for one trending topic. Returns video metadata or None."""
@@ -254,6 +262,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             str(work_dir / "voices"),
             rate=voice_rate,
         )
+        script = _append_chapters_to_description(script, voices)
 
         # 3. Images
         log.info("[%d] Fetching background images...", index)
