@@ -200,59 +200,6 @@ def _enrich_metadata(script: dict, is_short: bool = False) -> dict:
     return script
 
 
-_BASE_TAGS_LONGFORM = ["bitnomad1", "hindi news", "trending news india"]
-_BASE_TAGS_SHORTS = ["bitnomad1", "hindi news", "shorts"]
-_DEFAULT_HASHTAGS_LONGFORM = ["#Hindi", "#News", "#Trending", "#India"]
-_DEFAULT_HASHTAGS_SHORTS = ["#Shorts", "#News", "#Breaking"]
-
-_MAX_TAG_CHARS = 500       # YouTube's total tag-list character limit
-_MAX_TAGS_LONGFORM = 25
-_MAX_TAGS_SHORTS = 15
-
-
-def _enrich_metadata(script: dict, is_short: bool = False) -> dict:
-    """
-    Deterministic safety net applied after LLM generation:
-    - dedupe tags case-insensitively
-    - guarantee a fixed base tag set is present
-    - cap total tags so the joined length stays under YouTube's 500-char limit
-    - guarantee the description contains at least one hashtag
-    """
-    base_tags = _BASE_TAGS_SHORTS if is_short else _BASE_TAGS_LONGFORM
-    max_tags = _MAX_TAGS_SHORTS if is_short else _MAX_TAGS_LONGFORM
-    default_hashtags = _DEFAULT_HASHTAGS_SHORTS if is_short else _DEFAULT_HASHTAGS_LONGFORM
-
-    raw_tags = [str(t).strip() for t in script.get("tags", []) if str(t).strip()]
-
-    seen = set()
-    deduped = []
-    for tag in base_tags + raw_tags:
-        key = tag.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(tag)
-
-    final_tags = []
-    total_chars = 0
-    for tag in deduped:
-        if len(final_tags) >= max_tags:
-            break
-        added_chars = len(tag) + (1 if final_tags else 0)  # +1 for comma join
-        if total_chars + added_chars > _MAX_TAG_CHARS:
-            break
-        final_tags.append(tag)
-        total_chars += added_chars
-    script["tags"] = final_tags
-
-    description = script.get("description", "") or ""
-    if "#" not in description:
-        description = description.rstrip() + "\n\n" + " ".join(default_hashtags)
-    script["description"] = description
-
-    return script
-
-
 def _parse_script_response(raw: str, topic: str, source: str, required_key: str = "sections") -> dict:
     """Parse a raw JSON-ish LLM response into the script dict, repairing minor errors."""
     raw = raw.strip()
