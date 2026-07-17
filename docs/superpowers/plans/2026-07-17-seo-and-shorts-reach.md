@@ -6,7 +6,7 @@
 
 **Architecture:** All changes live in three existing files — `pipeline/script_generator.py` (LLM prompt rules + a deterministic metadata post-processing safety net), `pipeline/video_creator.py` (pure chapter-offset math + a real-audio-duration chapter builder), and `scheduler.py` (wiring the chapter builder into the existing per-video pipeline). No new files are created except test scripts.
 
-**Tech Stack:** Python 3, no test framework (project has none — see Global Constraints). `pydub` (already a dependency) generates silent-audio fixtures for chapter tests. `unittest.mock.patch` (stdlib) stubs the LLM call for wiring tests.
+**Tech Stack:** Python 3, no test framework (project has none — see Global Constraints). `moviepy` (already a real dependency, used for video/audio elsewhere in the pipeline) generates silent-audio fixtures for chapter tests. `unittest.mock.patch` (stdlib) stubs the LLM call for wiring tests.
 
 ## Global Constraints
 
@@ -17,6 +17,7 @@
 - Timing constants that already exist and must be reused (not redefined) in chapter math: `_XFADE = 0.6` (crossfade seconds, `pipeline/video_creator.py`), the `0.8` second tail added to every section's audio duration (`pipeline/video_creator.py` `_build_section_clip`), and the `5` second title card duration (`pipeline/video_creator.py` `create_video`).
 - Never run `python scheduler.py --now` or `python generate_short_now.py` during implementation or verification — both upload real videos to a live YouTube channel. Verification calls `generate_script()`, `generate_shorts_script()`, `build_chapters()`, or the new helper functions directly, never the full pipeline entry points.
 - Chapters are a long-form-only feature. YouTube Shorts do not support chapters — do not wire `build_chapters()` into `generate_short_now.py` or the Shorts branch of `scheduler.py`.
+- `pydub` (declared in `requirements.txt` but unused anywhere in production code) is broken under this project's Python 3.13 environment — it imports the removed stdlib `audioop` module and no backport is installed. Do not use `pydub` for anything, including test fixtures. Use `moviepy`'s `mpe.AudioClip` (confirmed working) to generate silent-audio test fixtures instead — see the exact helper in Tasks 6 and 7.
 
 ---
 
@@ -694,13 +695,20 @@ git commit -m "feat: add pure chapter-offset math matching create_video's crossf
 import tempfile
 from pathlib import Path
 
-from pydub import AudioSegment
+import moviepy as mpe
+import numpy as np
 
 from pipeline.video_creator import build_chapters
 
 
 def _make_silent_mp3(path: str, seconds: float):
-    AudioSegment.silent(duration=int(seconds * 1000)).export(path, format="mp3")
+    def make_frame(t):
+        if np.isscalar(t):
+            return np.array([0.0, 0.0])
+        return np.zeros((len(t), 2))
+    clip = mpe.AudioClip(make_frame, duration=seconds, fps=44100)
+    clip.write_audiofile(path, logger=None)
+    clip.close()
 
 
 def test_build_chapters_matches_pure_offsets():
@@ -815,13 +823,20 @@ git commit -m "feat: add build_chapters wrapper reading real voice-clip duration
 import tempfile
 from pathlib import Path
 
-from pydub import AudioSegment
+import moviepy as mpe
+import numpy as np
 
 from scheduler import _append_chapters_to_description
 
 
 def _make_silent_mp3(path: str, seconds: float):
-    AudioSegment.silent(duration=int(seconds * 1000)).export(path, format="mp3")
+    def make_frame(t):
+        if np.isscalar(t):
+            return np.array([0.0, 0.0])
+        return np.zeros((len(t), 2))
+    clip = mpe.AudioClip(make_frame, duration=seconds, fps=44100)
+    clip.write_audiofile(path, logger=None)
+    clip.close()
 
 
 def test_appends_chapters_to_existing_description():
