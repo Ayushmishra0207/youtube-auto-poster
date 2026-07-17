@@ -31,14 +31,20 @@ import schedule
 from config import (
     BASE_DIR,
     KEEP_OUTPUT_DAYS,
+    NEWS_CATEGORIES,
+    NEWS_TTS_RATE,
     OUTPUT_DIR,
     PEXELS_API_KEY,
+    SHORTS_PER_DAY,
+    SHORTS_UPLOAD_SLOTS,
     UPLOAD_SLOTS_IST,
     GENERATION_LEAD_HOURS,
 )
 from pipeline.image_fetcher import fetch_all_section_images
 from pipeline.logger import log
-from pipeline.script_generator import generate_script
+from pipeline.news_fetcher import get_breaking_headlines
+from pipeline.script_generator import generate_script, generate_shorts_script
+from pipeline.shorts_creator import create_short
 from pipeline.trends import get_trending_topics
 from pipeline.uploader import upload_thumbnail, upload_video
 from pipeline.video_creator import create_thumbnail, create_video
@@ -228,7 +234,7 @@ def _load_slot_plan() -> list[dict]:
 
 
 def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
-                      category_style: str = "") -> dict | None:
+                      category_style: str = "", voice_rate: str | None = None) -> dict | None:
     """Full pipeline for one trending topic. Returns video metadata or None."""
     work_dir = base_dir / f"video_{index:02d}"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -246,6 +252,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         voices = generate_section_voices(
             script["sections"],
             str(work_dir / "voices"),
+            rate=voice_rate,
         )
 
         # 3. Images
@@ -261,9 +268,12 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         with open(work_dir / "script.json", "w", encoding="utf-8") as _f:
             _json.dump(script, _f, ensure_ascii=False, indent=2)
 
-        # 5. Thumbnail
+        # 5. Thumbnail — news-style composite built from this video's own images
         thumbnail_path = str(work_dir / "thumbnail.jpg")
-        create_thumbnail(script, thumbnail_path)
+        flat_images = [p for section in images for p in section if p]
+        # Spread picks across sections for visual variety
+        picks = flat_images[:: max(1, len(flat_images) // 3)][:3] if flat_images else []
+        create_thumbnail(script, thumbnail_path, image_paths=picks)
 
         # 5. Video
         video_path = str(work_dir / "final.mp4")
@@ -308,12 +318,15 @@ def run_pipeline():
     # __ Generate all videos __________________________________________________
     videos = []
     for i, plan in enumerate(slot_plan, start=1):
+        # News-category videos get a faster, more urgent voice
+        rate = NEWS_TTS_RATE if plan.get("category") in NEWS_CATEGORIES else None
         meta = _run_single_video(
             topic=plan["topic"],
             slot_str=plan["slot"],
             index=i,
             base_dir=base_dir,
             category_style=plan.get("category_style", ""),
+            voice_rate=rate,
         )
         if meta:
             meta["yt_category_id"] = plan.get("yt_category_id", "25")
@@ -340,6 +353,12 @@ def run_pipeline():
         except Exception as e:
             log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
 
+    # __ YouTube Shorts (3 per day: India / World / Business breaking news) ___
+    try:
+        _run_shorts(base_dir)
+    except Exception as e:
+        log.error("Shorts stage failed: %s", e, exc_info=True)
+
     # __ Disk cleanup ________________________________________________________
     log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
     _cleanup_old_output()
@@ -347,6 +366,62 @@ def run_pipeline():
     log.info("Pipeline complete. Videos scheduled for 18:30–19:30 IST.")
     log.info("=" * 60)
     _release_lock()
+
+
+# ___ YouTube Shorts ___________________________________________________________
+
+# Each daily short gets its own news feed + focus
+_SHORTS_PLAN = [
+    {"feed": "india",    "focus": "India breaking news"},
+    {"feed": "world",    "focus": "World breaking news"},
+    {"feed": "business", "focus": "Business and economy breaking news"},
+]
+
+
+def _run_shorts(base_dir: Path):
+    """Generate and upload the daily YouTube Shorts (breaking news, 1.5x voice)."""
+    log.info("-" * 60)
+    log.info("Generating %d YouTube Shorts...", SHORTS_PER_DAY)
+
+    for i, plan in enumerate(_SHORTS_PLAN[:SHORTS_PER_DAY], start=1):
+        work_dir = base_dir / f"short_{i:02d}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # 1. Real headlines from the last 48 h
+            headlines = get_breaking_headlines(plan["feed"], max_age_hours=48, limit=15)
+            if len(headlines) < 3:
+                log.warning("Short %d: only %d fresh headlines for feed '%s' — skipping",
+                            i, len(headlines), plan["feed"])
+                continue
+
+            # 2. Script (Claude → OpenRouter → Gemini chain)
+            script = generate_shorts_script(headlines, focus=plan["focus"])
+
+            import json as _json
+            with open(work_dir / "script.json", "w", encoding="utf-8") as _f:
+                _json.dump(script, _f, ensure_ascii=False, indent=2)
+
+            # 3. Render vertical short (voice at 1.5x inside)
+            video_path = create_short(script, str(work_dir))
+
+            # 4. Upload with a scheduled publish slot
+            slot = SHORTS_UPLOAD_SLOTS[(i - 1) % len(SHORTS_UPLOAD_SLOTS)]
+            title = script.get("title", f"आज की बड़ी खबरें {i}")
+            if "#shorts" not in title.lower():
+                title = (title[:82] + " #Shorts")
+            log.info("Uploading Short %d: %s → %s IST", i, title[:60], slot)
+            upload_video(
+                video_path=video_path,
+                title=title,
+                description=script.get("description", "#Shorts #News"),
+                tags=script.get("tags", []),
+                publish_at_utc=_ist_slot_to_utc(slot),
+            )
+        except Exception as e:
+            log.error("Short %d failed: %s", i, e, exc_info=True)
+
+    log.info("Shorts stage complete.")
 
 
 # ___ Entry point ______________________________________________________________

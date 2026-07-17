@@ -54,6 +54,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 UPLOAD_SLOTS = ["18:30", "18:40", "18:50", "19:00", "19:10", "19:20", "19:30"]
 
 _pipeline_proc: Optional[subprocess.Popen] = None
+_short_proc: Optional[subprocess.Popen] = None
+SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
 
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(title="YouTube Auto-Poster API", version="2.0.0")
@@ -88,6 +90,22 @@ def _pipeline_running() -> bool:
     global _pipeline_proc
     return _pipeline_proc is not None and _pipeline_proc.poll() is None
 
+def _lock_pid_alive() -> bool:
+    """True only if pipeline.lock exists AND its PID is a live process.
+    A stale lock (dead PID) must not make the dashboard show 'Running' forever."""
+    lock_file = BASE_DIR / "pipeline.lock"
+    if not lock_file.exists():
+        return False
+    try:
+        pid = int(lock_file.read_text().strip())
+        r = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return str(pid) in r.stdout
+    except Exception:
+        return False
+
 def _read_env() -> dict:
     env = {}
     if ENV_FILE.exists():
@@ -115,6 +133,26 @@ def _video_status(vdir: Path) -> str:
     if (vdir / "thumbnail.jpg").exists():   return "rendering"
     if any(vdir.glob("voices/*.mp3")):      return "generating"
     return "pending"
+
+def _short_status(sdir: Path) -> str:
+    if (sdir / "youtube_id.txt").exists(): return "uploaded"
+    if (sdir / "short.mp4").exists():      return "ready"
+    if (sdir / "script.json").exists():    return "generating"
+    return "pending"
+
+def _short_proc_running() -> bool:
+    global _short_proc
+    return _short_proc is not None and _short_proc.poll() is None
+
+def _short_lock_pid_alive() -> bool:
+    if not SHORT_LOCK_FILE.exists():
+        return False
+    try:
+        pid = int(SHORT_LOCK_FILE.read_text().strip())
+        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True, timeout=10)
+        return str(pid) in r.stdout
+    except Exception:
+        return False
 
 def _load_topic_config() -> dict:
     # Cloud: seed from env var on first boot if file doesn't exist
@@ -153,8 +191,7 @@ async def status():
     today_dir = OUTPUT_DIR / _today()
     video_count = len(list(today_dir.glob("video_*"))) if today_dir.exists() else 0
     last_log = _tail_log(1)
-    lock_file = BASE_DIR / "pipeline.lock"
-    is_running = _pipeline_running() or lock_file.exists()
+    is_running = _pipeline_running() or _lock_pid_alive()
     return {
         "is_running": is_running,
         "today_date": _today(),
@@ -378,14 +415,19 @@ async def manual_upload(
             body["status"]["publishAt"] = schedule_time
 
         from googleapiclient.http import MediaFileUpload
-        media = MediaFileUpload(tmp_video, mimetype="video/mp4", resumable=True,
-                                chunksize=10 * 1024 * 1024)
-        req = svc.videos().insert(part="snippet,status", body=body, media_body=media)
 
-        response = None
-        while response is None:
-            _, response = req.next_chunk()
+        def _do_upload() -> dict:
+            """Blocking upload — runs in a worker thread so the event loop stays free."""
+            media = MediaFileUpload(tmp_video, mimetype="video/mp4", resumable=True,
+                                    chunksize=10 * 1024 * 1024)
+            req = svc.videos().insert(part="snippet,status", body=body, media_body=media)
+            response = None
+            while response is None:
+                # retries transient socket / 5xx errors with exponential backoff
+                _, response = req.next_chunk(num_retries=5)
+            return response
 
+        response = await asyncio.to_thread(_do_upload)
         video_id = response["id"]
 
         # Optional thumbnail
@@ -449,22 +491,23 @@ async def upload_generated_video(date: str, index: int):
         except Exception:
             pass
 
-    try:
-        svc = _get_youtube_service()
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "categoryId": category_id,
+            "defaultLanguage": "hi",
+        },
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False,
+        },
+    }
 
-        body = {
-            "snippet": {
-                "title": title,
-                "description": description,
-                "tags": tags,
-                "categoryId": category_id,
-                "defaultLanguage": "hi",
-            },
-            "status": {
-                "privacyStatus": "public",
-                "selfDeclaredMadeForKids": False,
-            },
-        }
+    def _do_upload() -> dict:
+        """Blocking upload — runs in a worker thread so the event loop stays free."""
+        svc = _get_youtube_service()
 
         from googleapiclient.http import MediaFileUpload
         media = MediaFileUpload(
@@ -475,7 +518,9 @@ async def upload_generated_video(date: str, index: int):
 
         response = None
         while response is None:
-            _, response = req.next_chunk()
+            # num_retries: exponential-backoff retries on transient socket /
+            # 5xx errors (e.g. WinError 10053 mid-upload)
+            _, response = req.next_chunk(num_retries=5)
 
         video_id = response["id"]
         id_file.write_text(video_id, encoding="utf-8")  # persist for status tracking
@@ -488,7 +533,7 @@ async def upload_generated_video(date: str, index: int):
                     media_body=MediaFileUpload(str(thumb_path), mimetype="image/jpeg"),
                 ).execute()
             except Exception:
-                pass
+                pass  # thumbnail upload non-critical
 
         return {
             "ok": True,
@@ -496,6 +541,8 @@ async def upload_generated_video(date: str, index: int):
             "url": f"https://youtube.com/watch?v={video_id}",
         }
 
+    try:
+        return await asyncio.to_thread(_do_upload)
     except HTTPException:
         raise
     except Exception as e:
@@ -518,6 +565,180 @@ async def run_pipeline():
         stderr=subprocess.DEVNULL,
     )
     return {"ok": True, "pid": _pipeline_proc.pid, "message": "Pipeline started"}
+
+
+# ── YouTube Shorts ───────────────────────────────────────────────────────────────
+
+def _short_dir(date: str, index: int) -> Path:
+    return OUTPUT_DIR / date / f"short_{index:02d}"
+
+@app.get("/api/shorts")
+async def list_shorts(date: Optional[str] = None):
+    target = date or _today()
+    today_dir = OUTPUT_DIR / target
+    shorts = []
+    if today_dir.exists():
+        dirs = sorted(d for d in today_dir.iterdir() if d.is_dir() and d.name.startswith("short_"))
+        for d in dirs:
+            index = int(d.name.split("_")[1])
+            script_path = d / "script.json"
+            title = d.name
+            description = ""
+            tags: list = []
+            if script_path.exists():
+                try:
+                    s = json.loads(script_path.read_text(encoding="utf-8"))
+                    title = s.get("title", title)
+                    description = s.get("description", "")
+                    tags = s.get("tags", [])
+                except Exception:
+                    pass
+            yt_id_path = d / "youtube_id.txt"
+            yt_id  = yt_id_path.read_text().strip() if yt_id_path.exists() else ""
+            yt_url = f"https://youtube.com/watch?v={yt_id}" if yt_id else ""
+            shorts.append({
+                "index": index,
+                "dir": d.name,
+                "date": target,
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "status": _short_status(d),
+                "has_video": (d / "short.mp4").exists(),
+                "has_thumbnail": (d / "thumbnail.jpg").exists(),
+                "has_script": script_path.exists(),
+                "thumbnail_url": f"/api/shorts/{target}/{index}/thumbnail",
+                "video_url": f"/api/shorts/{target}/{index}/video",
+                "script_url": f"/api/shorts/{target}/{index}/script",
+                "youtube_id": yt_id,
+                "youtube_url": yt_url,
+            })
+    return {
+        "date": target,
+        "shorts": shorts,
+        "is_generating": _short_proc_running() or _short_lock_pid_alive(),
+    }
+
+@app.get("/api/shorts/{date}/{index}/thumbnail")
+async def serve_short_thumbnail(date: str, index: int):
+    path = _short_dir(date, index) / "thumbnail.jpg"
+    if not path.exists():
+        raise HTTPException(404, "Thumbnail not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+@app.get("/api/shorts/{date}/{index}/video")
+async def serve_short_video(date: str, index: int):
+    path = _short_dir(date, index) / "short.mp4"
+    if not path.exists():
+        raise HTTPException(404, "Video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+@app.get("/api/shorts/{date}/{index}/script")
+async def serve_short_script(date: str, index: int):
+    path = _short_dir(date, index) / "script.json"
+    if not path.exists():
+        raise HTTPException(404, "Script not found")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+class GenerateShortPayload(BaseModel):
+    feed: str = "india"  # "india" | "world" | "business"
+
+@app.post("/api/shorts/generate")
+async def generate_short(payload: GenerateShortPayload):
+    global _short_proc
+
+    if payload.feed not in ("india", "world", "business"):
+        raise HTTPException(400, "feed must be one of: india, world, business")
+
+    if _short_proc_running() or _short_lock_pid_alive():
+        return {"ok": False, "message": "A Short is already being generated"}
+
+    _short_proc = subprocess.Popen(
+        [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--feed", payload.feed],
+        cwd=str(BASE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return {"ok": True, "pid": _short_proc.pid, "message": "Short generation started"}
+
+@app.post("/api/shorts/upload/{date}/{index}")
+async def upload_generated_short(date: str, index: int):
+    """Upload an already-generated Short to YouTube as a Short (#Shorts)."""
+    sdir       = _short_dir(date, index)
+    video_path = sdir / "short.mp4"
+    thumb_path = sdir / "thumbnail.jpg"
+    script_path= sdir / "script.json"
+    id_file    = sdir / "youtube_id.txt"
+
+    if not video_path.exists():
+        raise HTTPException(404, "Short video not found — generate it first.")
+
+    title = f"Breaking News Short {index} | {date} #Shorts"
+    description = "#Shorts #News #Breaking"
+    tags: list[str] = ["shorts", "news", "breaking news"]
+
+    if script_path.exists():
+        try:
+            s = json.loads(script_path.read_text(encoding="utf-8"))
+            title       = s.get("title", title)[:100]
+            if "#shorts" not in title.lower():
+                title = title[:90] + " #Shorts"
+            description = s.get("description", description)[:5000]
+            tags        = [str(t)[:500] for t in s.get("tags", tags)[:500]]
+        except Exception:
+            pass
+
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "categoryId": "25",
+            "defaultLanguage": "hi",
+        },
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+    def _do_upload() -> dict:
+        svc = _get_youtube_service()
+        from googleapiclient.http import MediaFileUpload
+        media = MediaFileUpload(
+            str(video_path), mimetype="video/mp4",
+            resumable=True, chunksize=10 * 1024 * 1024,
+        )
+        req = svc.videos().insert(part="snippet,status", body=body, media_body=media)
+
+        response = None
+        while response is None:
+            _, response = req.next_chunk(num_retries=5)
+
+        video_id = response["id"]
+        id_file.write_text(video_id, encoding="utf-8")
+
+        if thumb_path.exists():
+            try:
+                svc.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(str(thumb_path), mimetype="image/jpeg"),
+                ).execute()
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "url": f"https://youtube.com/watch?v={video_id}",
+        }
+
+    try:
+        return await asyncio.to_thread(_do_upload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {e}")
 
 
 # ── Logs ───────────────────────────────────────────────────────────────────────

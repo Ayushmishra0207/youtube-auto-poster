@@ -4,7 +4,7 @@ import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, ListTodo, Film, ScrollText,
   CalendarClock, Settings, Zap, BarChart2, PlaySquare,
-  Upload, Target, X,
+  Upload, Target, X, Sparkles,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
@@ -37,6 +37,7 @@ const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "analytics",  label: "Analytics",  icon: <BarChart2 size={18} /> },
   { id: "topics",     label: "Topics",     icon: <ListTodo size={18} /> },
   { id: "videos",     label: "Videos",     icon: <Film size={18} /> },
+  { id: "shorts",     label: "Shorts",     icon: <Sparkles size={18} /> },
   { id: "upload",     label: "Upload",     icon: <Upload size={18} /> },
   { id: "logs",       label: "Logs",       icon: <ScrollText size={18} /> },
   { id: "schedule",   label: "Schedule",   icon: <CalendarClock size={18} /> },

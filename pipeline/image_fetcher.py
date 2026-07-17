@@ -1,5 +1,6 @@
 """
-Background image pipeline: HuggingFace (primary) → Gemini (fallback) → Pexels (fallback) → gradient.
+Background image pipeline:
+HuggingFace (primary) → Gemini → Pollinations (free, unlimited) → Pexels (stock) → gradient.
 
 fetch_all_section_images() returns list[list[str|None]] — one inner list per
 section, each containing paths to multiple images that video_creator cycles through.
@@ -20,11 +21,12 @@ MAX_IMAGES_PER_SECTION = 10  # number of images per section
 # ── Pexels fallback ───────────────────────────────────────────────────────────
 
 @with_retry(max_attempts=3, base_delay=2.0, exceptions=(requests.exceptions.RequestException,))
-def _fetch_pexels(query: str, api_key: str, output_path: str, result_index: int) -> str | None:
+def _fetch_pexels(query: str, api_key: str, output_path: str, result_index: int,
+                  orientation: str = "landscape") -> str | None:
     resp = requests.get(
         PEXELS_API,
         headers={"Authorization": api_key},
-        params={"query": query, "per_page": 5, "orientation": "landscape", "size": "large"},
+        params={"query": query, "per_page": 5, "orientation": orientation, "size": "large"},
         timeout=TIMEOUT,
     )
     resp.raise_for_status()
@@ -41,11 +43,12 @@ def _fetch_pexels(query: str, api_key: str, output_path: str, result_index: int)
     return output_path
 
 
-def fetch_image_pexels(query: str, api_key: str, output_path: str, result_index: int = 0) -> str | None:
+def fetch_image_pexels(query: str, api_key: str, output_path: str, result_index: int = 0,
+                       orientation: str = "landscape") -> str | None:
     if not api_key:
         return None
     try:
-        return _fetch_pexels(query, api_key, output_path, result_index)
+        return _fetch_pexels(query, api_key, output_path, result_index, orientation)
     except Exception as exc:
         log.warning("Pexels failed ('%s'): %s", query[:40], exc)
         return None
@@ -64,8 +67,9 @@ def fetch_all_section_images(
     Priority per image slot:
       1. HuggingFace FLUX.1-schnell (free AI-generated, most relevant)
       2. Gemini Imagen 4 (AI-generated fallback)
-      3. Pexels stock photo (real photography fallback)
-      4. None → video_creator uses dark gradient
+      3. Pollinations.ai (free, unlimited AI-generated fallback)
+      4. Pexels stock photo (real photography fallback)
+      5. None → video_creator uses dark gradient
 
     Returns list[list[str|None]] — outer = sections, inner = images per section.
     """
@@ -87,6 +91,8 @@ def fetch_all_section_images(
         use_gemini = False
         gemini_img = None
         GEMINI_API_KEY = ""
+
+    from pipeline.image_generator_pollinations import generate_image as pollinations_img
 
     results: list[list[str | None]] = []
 
@@ -116,13 +122,19 @@ def fetch_all_section_images(
                 if img:
                     log.info("Image %d.%d [gemini] %s", i + 1, j + 1, query[:45])
 
-            # 3. Fall back to Pexels
+            # 3. Fall back to Pollinations.ai (free, unlimited, no key needed)
+            if not img:
+                img = pollinations_img(query, img_path)
+                if img:
+                    log.info("Image %d.%d [pollinations] %s", i + 1, j + 1, query[:45])
+
+            # 4. Fall back to Pexels
             if not img:
                 img = fetch_image_pexels(query, api_key, img_path, result_index=j % 3)
                 if img:
                     log.info("Image %d.%d [pexels]  %s", i + 1, j + 1, query[:45])
 
-            # 4. Log gradient fallback
+            # 5. Log gradient fallback
             if not img:
                 log.info("Image %d.%d [gradient fallback] %s", i + 1, j + 1, query[:45])
 

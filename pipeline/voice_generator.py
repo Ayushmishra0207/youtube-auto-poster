@@ -23,18 +23,18 @@ from pipeline.retry import with_retry
 
 # ── Edge TTS (primary) ────────────────────────────────────────────────────────
 
-async def _edge_tts_async(text: str, output_path: str) -> str:
+async def _edge_tts_async(text: str, output_path: str, rate: str) -> str:
     """Async core for Edge TTS."""
-    comm = edge_tts.Communicate(text, TTS_VOICE, rate=TTS_RATE, pitch=TTS_PITCH)
+    comm = edge_tts.Communicate(text, TTS_VOICE, rate=rate, pitch=TTS_PITCH)
     await comm.save(output_path)
     return output_path
 
 
 @with_retry(max_attempts=3, base_delay=3.0, exceptions=(Exception,))
-def _edge_tts(text: str, output_path: str) -> str:
+def _edge_tts(text: str, output_path: str, rate: str) -> str:
     """Synchronous wrapper around the async Edge TTS call."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(_edge_tts_async(text, output_path))
+    asyncio.run(_edge_tts_async(text, output_path, rate))
     return output_path
 
 
@@ -50,13 +50,15 @@ def _gtts(text: str, output_path: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def text_to_speech(text: str, output_path: str) -> str:
+def text_to_speech(text: str, output_path: str, rate: str | None = None) -> str:
     """
     Convert text to MP3 using Edge TTS (MadhurNeural male voice).
     Falls back to gTTS if Edge TTS fails after retries.
+
+    rate: Edge TTS rate string (e.g. "+50%" for 1.5x). None → config default.
     """
     try:
-        _edge_tts(text, output_path)
+        _edge_tts(text, output_path, rate or TTS_RATE)
         log.info("Edge TTS  → %s", Path(output_path).name)
         return output_path
     except Exception as e:
@@ -66,7 +68,7 @@ def text_to_speech(text: str, output_path: str) -> str:
         return output_path
 
 
-def generate_section_voices(sections: list, output_dir: str) -> list[str]:
+def generate_section_voices(sections: list, output_dir: str, rate: str | None = None) -> list[str]:
     """
     Generate one MP3 per section.
     Returns list of file paths (empty string for any section that fails).
@@ -78,7 +80,7 @@ def generate_section_voices(sections: list, output_dir: str) -> list[str]:
         sid = section["id"]
         path = os.path.join(output_dir, f"voice_{sid:02d}.mp3")
         try:
-            text_to_speech(section["narration"], path)
+            text_to_speech(section["narration"], path, rate=rate)
             paths.append(path)
             log.info("Voice %02d saved → %s", sid, Path(path).name)
         except Exception as exc:

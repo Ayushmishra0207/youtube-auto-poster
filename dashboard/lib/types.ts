@@ -44,6 +44,24 @@ export interface VideoScript {
   }[];
 }
 
+export interface ShortMeta {
+  index: number;
+  dir: string;
+  date: string;
+  title: string;
+  description: string;
+  tags: string[];
+  status: "ready" | "uploaded" | "generating" | "pending" | "failed";
+  has_video: boolean;
+  has_thumbnail: boolean;
+  has_script: boolean;
+  thumbnail_url: string;
+  video_url: string;
+  script_url: string;
+  youtube_id: string;
+  youtube_url: string;
+}
+
 export interface TopicsResponse {
   topics: string[];
   source: "override" | "auto";

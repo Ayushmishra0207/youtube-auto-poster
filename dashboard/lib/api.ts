@@ -56,6 +56,9 @@ export const api = {
   settings:        ()                          => get("/api/settings"),
   saveSettings:    (data: Record<string, string>) => post("/api/settings", data),
   script:          (date: string, index: number)  => get(`/api/videos/${date}/${index}/script`),
+  shorts:          (date?: string)             => get(`/api/shorts${date ? `?date=${date}` : ""}`),
+  generateShort:   (feed: "india" | "world" | "business") => post("/api/shorts/generate", { feed }),
+  shortScript:     (date: string, index: number)  => get(`/api/shorts/${date}/${index}/script`),
 };
 
 export interface TopicConfigSlot {

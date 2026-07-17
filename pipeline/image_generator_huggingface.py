@@ -23,6 +23,11 @@ _STYLE = (
 
 _client = None
 
+# Set for the rest of this process once we see a quota/billing error, so we
+# stop retrying (and logging) a provider that's already known to be exhausted
+# for every remaining image request this run.
+_quota_exhausted = False
+
 
 def _get_client():
     global _client
@@ -35,12 +40,19 @@ def _get_client():
     return _client
 
 
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "402" in msg or "Payment Required" in msg or "quota" in msg.lower()
+
+
 def generate_image(prompt: str, output_path: str) -> str | None:
     """
     Generate one image for `prompt` via HF Inference and save to output_path.
     Returns the saved path on success, None on any failure.
     """
-    if not HUGGINGFACE_API_KEY:
+    global _quota_exhausted
+
+    if not HUGGINGFACE_API_KEY or _quota_exhausted:
         return None
 
     try:
@@ -59,5 +71,9 @@ def generate_image(prompt: str, output_path: str) -> str | None:
         return output_path
 
     except Exception as exc:
-        log.warning("HuggingFace image failed ('%s'): %s", prompt[:50], exc)
+        if _is_quota_error(exc):
+            _quota_exhausted = True
+            log.warning("HuggingFace quota exhausted — skipping HuggingFace for the rest of this run")
+        else:
+            log.warning("HuggingFace image failed ('%s'): %s", prompt[:50], exc)
         return None

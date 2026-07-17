@@ -3,13 +3,14 @@
 import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, BarChart2, Film, Upload,
-  ListTodo, ScrollText, CalendarClock, Settings,
+  ListTodo, ScrollText, CalendarClock, Settings, Sparkles,
 } from "lucide-react";
 
 const NAV: { id: Tab; icon: React.ReactNode; label: string }[] = [
   { id: "overview",  icon: <LayoutDashboard size={19} />, label: "Home"     },
   { id: "analytics", icon: <BarChart2 size={19} />,       label: "Stats"    },
   { id: "videos",    icon: <Film size={19} />,            label: "Videos"   },
+  { id: "shorts",    icon: <Sparkles size={19} />,        label: "Shorts"   },
   { id: "upload",    icon: <Upload size={19} />,          label: "Upload"   },
   { id: "topics",    icon: <ListTodo size={19} />,        label: "Topics"   },
   { id: "logs",      icon: <ScrollText size={19} />,      label: "Logs"     },

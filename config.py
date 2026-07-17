@@ -22,6 +22,17 @@ ANTHROPIC_API_KEY       = os.getenv("ANTHROPIC_API_KEY", "")
 PEXELS_API_KEY          = os.getenv("PEXELS_API_KEY", "")
 GEMINI_API_KEY          = os.getenv("GEMINI_API_KEY", "")
 HUGGINGFACE_API_KEY     = os.getenv("HUGGINGFACE_API_KEY", "")
+OPENROUTER_API_KEY      = os.getenv("OPENROUTER_API_KEY", "")
+
+# Free OpenRouter models tried in order if Claude fails (out of credits, rate-limited, etc.)
+# NOTE: OpenRouter's free catalog changes over time — if all of these start failing with
+# 404 ("model unavailable for free"), refresh this list from https://openrouter.ai/models?max_price=0
+OPENROUTER_FALLBACK_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "openai/gpt-oss-120b:free",
+]
 YOUTUBE_CLIENT_SECRETS  = str(BASE_DIR / "client_secrets.json")
 YOUTUBE_TOKEN_FILE      = str(BASE_DIR / "youtube_token.pickle")
 
@@ -52,6 +63,20 @@ TTS_RATE   = os.getenv("TTS_RATE",  "-12%")   # deliberate news-anchor pace
 TTS_PITCH  = os.getenv("TTS_PITCH", "-4Hz")   # slight depth, stays natural
 # gTTS fallback (used only if Edge TTS fails)
 TTS_LANG   = "hi"
+
+# Faster delivery for time-sensitive content
+NEWS_TTS_RATE   = os.getenv("NEWS_TTS_RATE",   "+15%")  # news-category long videos
+SHORTS_TTS_RATE = os.getenv("SHORTS_TTS_RATE", "+50%")  # YouTube Shorts (1.5x)
+
+# Long-video categories that get the faster news voice
+NEWS_CATEGORIES = {"news_india", "news_world", "finance"}
+
+# ─── YouTube Shorts ────────────────────────────────────────────────────────────
+SHORTS_PER_DAY      = 3
+SHORTS_WIDTH        = 1080
+SHORTS_HEIGHT       = 1920
+SHORTS_MAX_SECONDS  = 59      # hard YouTube Shorts limit is 60 s
+SHORTS_UPLOAD_SLOTS = ["19:40", "19:45", "19:50"]   # right after the 7 long slots
 
 # ─── Background music ──────────────────────────────────────────────────────────
 BG_MUSIC_PATH   = str(ASSETS_DIR / "music" / "background.mp3")
