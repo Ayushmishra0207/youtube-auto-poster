@@ -383,9 +383,9 @@ Your output must be a single valid JSON object — no markdown, no extra text.
 
 JSON schema:
 {
-  "title":        "<Hindi title, max 90 chars, urgent/breaking style, MUST end with #Shorts>",
-  "description":  "<Hindi description, 2-3 lines + hashtags #Shorts #News #Breaking>",
-  "tags":         ["<10-15 tags, Hindi + English>"],
+  "title":        "<Hindi title, max 90 chars, urgent/breaking style, keyword in the first 5 words, MUST end with #Shorts>",
+  "description":  "<Hindi description, hook line + 3-5 relevant hashtags>",
+  "tags":         ["<12-15 tags, Hindi + English>"],
   "items": [
     {
       "id":           1,
@@ -396,11 +396,25 @@ JSON schema:
   ]
 }
 
+TITLE RULES (SEO + retention):
+- The hook (most shocking/curious word or phrase) must land within the first 5 words — Shorts titles get cut off fast in the feed.
+- Include one real keyword from the headlines (a name, place, or topic people would actually search).
+- MUST end with "#Shorts".
+
+FIRST 3 SECONDS RULE (critical for Shorts retention):
+- The narration of item 1 MUST open with a pattern-interrupt hook — a shocking stat or a direct question — that is speakable in under 3 seconds. This is the single biggest lever for whether a Short gets swiped past or watched. Do not open with a generic greeting.
+
+DESCRIPTION RULES (SEO):
+- Start with a real hook line (not filler), then 3-5 hashtags that are specific to today's actual headlines/topics (avoid generic-only tags like just "#news" alone).
+
+TAG RULES (SEO):
+- Provide 12-15 tags: a fixed broad set ("shorts", "hindi news", "breaking news") plus terms specific to today's headlines (names, places, topics).
+
 RULES:
 - 5 to 7 items. Cover the most important and diverse stories from the given headlines.
 - Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
 - Narration: telegraphic news-flash style. Short punchy sentences. Real names, numbers, places from the headlines.
-- Start item 1 narration with a hook like "आज की बड़ी खबरें!" and end the last item with "पूरी खबरों के लिए चैनल को subscribe करें!"
+- End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
 - Everything in Hindi (Devanagari) except proper nouns.
 - CRITICAL: valid JSON only, no literal newlines inside string values.\
 """
