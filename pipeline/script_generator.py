@@ -66,6 +66,22 @@ JSON schema:
   ]
 }
 
+TITLE RULES (SEO):
+- The single most important search keyword (the topic's name/subject) MUST appear within the first 40 characters — mobile search results and the suggested-video feed truncate titles there.
+- Combine the keyword with one power word (शॉकिंग, खुलासा, सच्चाई, वजह) and, where natural, a number or specific fact.
+- Max 100 chars total. Do not use ALL CAPS or excessive punctuation (!!!, ???) — YouTube's spam filters and viewer trust both suffer.
+
+DESCRIPTION RULES (SEO):
+- Line 1: a hook line that repeats the primary keyword — this is what shows in search-result snippets and the suggested-video description preview, so it must stand alone and make sense out of context.
+- Then 2-3 short paragraphs summarising the story, repeating the keyword and 2-3 close variants naturally (never keyword-stuff — write for a human first).
+- Then a one-line subscribe CTA.
+- End with a clean block of 5-8 hashtags, most important first (YouTube shows the first 3 hashtags above the video title).
+
+TAG RULES (SEO):
+- Provide 20-25 tags, ordered broad → specific (YouTube weights earlier tags more heavily). Start with 3-4 broad category tags (e.g. "hindi news", "india news"), then narrow to the specific topic and named entities.
+- Never include two near-duplicate variants of the same phrase (e.g. do not include both "corruption india" and "india corruption") — pick the stronger one.
+- Mix Hindi and English tags; include at least a few trending/generic ones.
+
 NARRATION RULES (critical for natural human-like voice):
 - Write SHORT sentences. Maximum 12-15 words per sentence. News anchors speak in short bursts.
 - Use conversational Hindi, not formal/bookish. Like you're talking to a friend.
@@ -88,6 +104,9 @@ IMAGE SEARCHES (5 per section):
 - Mix: wide establishing shots, close-ups, people reacting, dramatic scenes, data/charts.
 - Examples for a corruption story: ["India parliament building exterior", "Indian politician speech crowd", "money corruption briefcase India", "protest India street crowd", "newspaper India headline printing"]
 
+THUMBNAIL TEXT RULES:
+- Must create real curiosity, but must not promise something the video doesn't actually deliver — misleading thumbnails hurt session watch time and invite complaints, which hurts the channel more than a lower CTR would.
+
 MONETIZATION FOCUS:
 - Content must maximize WATCH TIME — every section must end with a teaser for the next.
 - Use cliffhangers: "लेकिन असली बात तो आगे है..." / "अगले हिस्से में जो बात है वो आपको हैरान कर देगी..."
@@ -96,8 +115,7 @@ MONETIZATION FOCUS:
 Rules:
 - Script must be entirely in Hindi (Devanagari script).
 - CRITICAL: Output must be valid JSON. Do NOT include literal newline characters inside string values. Write each narration as a single continuous string with no line breaks.
-- Total narration ≈ 7–9 minutes of speech for better watch time.
-- Tags: 15-20 mix of Hindi + English, include trending ones.\
+- Total narration ≈ 7–9 minutes of speech for better watch time.\
 """
 
 
