@@ -4,12 +4,20 @@ FastAPI backend for the YouTube Auto-Poster Dashboard.
 Endpoints:
   GET  /api/status                          Pipeline running state + today's stats
   GET  /api/videos                          List today's generated videos
+  POST /api/videos/{date}/{n}/regenerate    Regenerate one video slot in place
+  POST /api/shorts/{date}/{n}/regenerate    Regenerate one Short in place
+  GET  /api/locales                         Country/continent targets, grouped by continent
+  POST /api/shorts/generate                 Generate Short(s); locale + count for batch regional generation
+  GET  /api/community-posts                 Draft Community-post captions (copy into YouTube Studio yourself)
+  POST /api/community-posts/{id}/dismiss    Remove a draft from the queue
+  POST /api/community-posts/generate        Force an engagement pass (auto-comments + draft top-up) now
   GET  /api/topics                          Current topic list (override or auto)
   POST /api/topics                          Set topic overrides
   DELETE /api/topics                        Clear topic overrides
   GET  /api/topic-config                    Get category config for all 7 slots
   PUT  /api/topic-config                    Save category config
   GET  /api/analytics                       YouTube channel + recent video stats
+  GET  /api/monetization                    Real progress toward YPP eligibility (standard + Shorts paths)
   POST /api/run                             Trigger scheduler.py --now
   GET  /api/logs?lines=N                    Last N log lines
   WS   /ws/logs                             Real-time log stream (new lines only)
@@ -31,14 +39,21 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+
+import auth as auth_module
+from config import ENGAGEMENT_POLL_SECONDS
+from db import init_db
+from pipeline.locales import DEFAULT_LOCALE, LOCALES, locales_by_continent
+from pipeline.logger import log
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR         = Path(__file__).parent.parent
@@ -56,6 +71,18 @@ UPLOAD_SLOTS = ["18:30", "18:40", "18:50", "19:00", "19:10", "19:20", "19:30"]
 _pipeline_proc: Optional[subprocess.Popen] = None
 _short_proc: Optional[subprocess.Popen] = None
 SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
+
+# Per-item regenerate subprocesses, keyed by "video:{date}:{index}" / "short:{date}:{index}"
+_regen_procs: dict[str, subprocess.Popen] = {}
+
+
+def _regen_key(kind: str, date: str, index: int) -> str:
+    return f"{kind}:{date}:{index}"
+
+
+def _regen_running(key: str) -> bool:
+    proc = _regen_procs.get(key)
+    return proc is not None and proc.poll() is None
 
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(title="YouTube Auto-Poster API", version="2.0.0")
@@ -77,6 +104,76 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Auth ───────────────────────────────────────────────────────────────────────
+# Small trusted user base (created via create_user.py, no public signup).
+# Session token via "Authorization: Bearer <token>" header, or a "token"
+# query param as a fallback for plain <img>/<video> tags that can't set
+# custom headers.
+_PUBLIC_PATHS = {"/api/auth/login", "/docs", "/openapi.json", "/redoc"}
+
+
+@app.on_event("startup")
+async def _startup():
+    init_db()
+    asyncio.create_task(_engagement_loop())
+
+
+async def _engagement_loop():
+    """Background poll loop: auto-comment CTAs on new uploads + top up the
+    Community-post draft queue. See pipeline/engagement.py for the actual work."""
+    from pipeline.engagement import run_engagement_pass
+    while True:
+        try:
+            result = await asyncio.to_thread(run_engagement_pass)
+            if result["posted_comments"] or result["draft_count"]:
+                log.info("Engagement pass: %s", result)
+        except Exception as exc:
+            log.error("Engagement pass failed: %s", exc, exc_info=True)
+        await asyncio.sleep(ENGAGEMENT_POLL_SECONDS)
+
+
+def _session_token_from_request(request: Request) -> str:
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        return header[len("Bearer "):].strip()
+    return request.query_params.get("token", "")
+
+
+@app.middleware("http")
+async def _require_auth(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
+        return await call_next(request)
+
+    token = _session_token_from_request(request)
+    user = auth_module.get_user_for_session(token)
+    if not user:
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    request.state.user = user
+    return await call_next(request)
+
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/auth/login")
+async def login(payload: LoginPayload):
+    user_id = auth_module.verify_user(payload.username, payload.password)
+    if not user_id:
+        raise HTTPException(401, "Invalid username or password")
+    token = auth_module.create_session(user_id)
+    return {"token": token, "username": payload.username}
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    auth_module.delete_session(_session_token_from_request(request))
+    return {"ok": True}
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    return {"user": request.state.user}
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -164,9 +261,8 @@ def _load_topic_config() -> dict:
         return json.loads(TOPIC_CONFIG.read_text(encoding="utf-8"))
     return {"slots": [], "categories": {}}
 
-def _get_youtube_service():
+def _get_youtube_credentials():
     from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
 
     # Cloud deployment: load token from YOUTUBE_TOKEN_B64 env var if file absent
     if not TOKEN_FILE.exists():
@@ -181,7 +277,15 @@ def _get_youtube_service():
         creds.refresh(Request())
         with open(TOKEN_FILE, "wb") as f:
             pickle.dump(creds, f)
-    return build("youtube", "v3", credentials=creds)
+    return creds
+
+def _get_youtube_service():
+    from googleapiclient.discovery import build
+    return build("youtube", "v3", credentials=_get_youtube_credentials())
+
+def _get_analytics_service():
+    from googleapiclient.discovery import build
+    return build("youtubeAnalytics", "v2", credentials=_get_youtube_credentials())
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
@@ -250,8 +354,58 @@ async def list_videos(date: Optional[str] = None):
                 "script_url": f"/api/videos/{target}/{i+1}/script",
                 "youtube_id": yt_id,
                 "youtube_url": yt_url,
+                "is_regenerating": _regen_running(_regen_key("video", target, i + 1)),
             })
     return {"date": target, "videos": videos}
+
+
+class RegenerateVideoPayload(BaseModel):
+    locale: str = ""  # optional override; empty = keep the slot's configured locale
+
+@app.post("/api/videos/{date}/{index}/regenerate")
+async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayload = RegenerateVideoPayload()):
+    """Regenerate an existing video slot in place (new script/voice/images/render, no auto-upload)."""
+    key = _regen_key("video", date, index)
+    if _regen_running(key) or _pipeline_running() or _lock_pid_alive():
+        return {"ok": False, "message": "A video generation/regeneration is already in progress"}
+
+    args = [PYTHON, str(BASE_DIR / "regenerate_video.py"), "--date", date, "--index", str(index)]
+    if payload.locale.strip():
+        if payload.locale not in LOCALES:
+            raise HTTPException(400, f"Unknown locale '{payload.locale}'")
+        args += ["--locale", payload.locale]
+
+    proc = subprocess.Popen(
+        args,
+        cwd=str(BASE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    _regen_procs[key] = proc
+    return {"ok": True, "pid": proc.pid, "message": f"Regenerating video {index}"}
+
+
+# ── Locales (country/continent targeting) ──────────────────────────────────────
+
+@app.get("/api/locales")
+async def get_locales():
+    """Locales grouped by continent, for the region/continent picker UI."""
+    grouped = locales_by_continent()
+    return {
+        "default": DEFAULT_LOCALE,
+        "continents": {
+            continent: [
+                {
+                    "code": loc.code,
+                    "label": loc.label,
+                    "language_name": loc.language_name,
+                    "script": loc.script,
+                }
+                for loc in locs
+            ]
+            for continent, locs in grouped.items()
+        },
+    }
 
 
 # ── Topics (manual override) ────────────────────────────────────────────────────
@@ -290,6 +444,7 @@ class TopicConfigSlot(BaseModel):
     slot: str
     category: str
     custom_topic: Optional[str] = None
+    locale: Optional[str] = None  # country/continent target for this slot; None = default (hi)
 
 class TopicConfigPayload(BaseModel):
     slots: list[TopicConfigSlot]
@@ -370,6 +525,83 @@ async def get_analytics():
         raise
     except Exception as e:
         raise HTTPException(500, f"YouTube API error: {e}")
+
+
+_STANDARD_SUBS_TARGET  = 1000
+_STANDARD_HOURS_TARGET = 4000
+_SHORTS_SUBS_TARGET    = 1000
+_SHORTS_VIEWS_TARGET   = 10_000_000
+
+@app.get("/api/monetization")
+async def get_monetization_progress():
+    """
+    Real progress toward YouTube Partner Program eligibility, both paths:
+      - Standard: 1,000 subscribers + 4,000 public watch hours (last 365 days)
+      - Shorts:   1,000 subscribers + 10,000,000 public Shorts views (last 90 days)
+    Requires the yt-analytics.readonly scope — re-run setup_auth.py once if
+    the saved token predates it (it auto-detects and forces re-consent).
+    """
+    try:
+        yt_svc = _get_youtube_service()
+        ch_resp = yt_svc.channels().list(part="statistics", mine=True).execute()
+        if not ch_resp.get("items"):
+            raise HTTPException(404, "No YouTube channel found for this account")
+        subscribers = int(ch_resp["items"][0]["statistics"].get("subscriberCount", 0))
+
+        analytics_svc = _get_analytics_service()
+        today = datetime.now(IST).date()
+
+        watch_resp = analytics_svc.reports().query(
+            ids="channel==MINE",
+            startDate=(today - timedelta(days=365)).isoformat(),
+            endDate=today.isoformat(),
+            metrics="estimatedMinutesWatched",
+        ).execute()
+        watch_rows = watch_resp.get("rows") or []
+        watch_hours = (watch_rows[0][0] if watch_rows else 0) / 60.0
+
+        shorts_resp = analytics_svc.reports().query(
+            ids="channel==MINE",
+            startDate=(today - timedelta(days=90)).isoformat(),
+            endDate=today.isoformat(),
+            metrics="views",
+            filters="creatorContentType==shorts",
+        ).execute()
+        shorts_rows = shorts_resp.get("rows") or []
+        shorts_views = shorts_rows[0][0] if shorts_rows else 0
+
+        subs_pct        = min(100.0, subscribers / _STANDARD_SUBS_TARGET * 100)
+        hours_pct       = min(100.0, watch_hours / _STANDARD_HOURS_TARGET * 100)
+        shorts_subs_pct = min(100.0, subscribers / _SHORTS_SUBS_TARGET * 100)
+        views_pct       = min(100.0, shorts_views / _SHORTS_VIEWS_TARGET * 100)
+
+        standard_overall = min(subs_pct, hours_pct)
+        shorts_overall   = min(shorts_subs_pct, views_pct)
+
+        return {
+            "subscribers": subscribers,
+            "watch_hours_365d": round(watch_hours, 1),
+            "shorts_views_90d": shorts_views,
+            "standard_path": {
+                "subs_target": _STANDARD_SUBS_TARGET,
+                "hours_target": _STANDARD_HOURS_TARGET,
+                "subs_pct": round(subs_pct, 1),
+                "hours_pct": round(hours_pct, 1),
+                "overall_pct": round(standard_overall, 1),
+            },
+            "shorts_path": {
+                "subs_target": _SHORTS_SUBS_TARGET,
+                "views_target": _SHORTS_VIEWS_TARGET,
+                "subs_pct": round(shorts_subs_pct, 1),
+                "views_pct": round(views_pct, 1),
+                "overall_pct": round(shorts_overall, 1),
+            },
+            "recommended_path": "shorts" if shorts_overall >= standard_overall else "standard",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"YouTube Analytics API error: {e}")
 
 
 # ── Manual Upload ──────────────────────────────────────────────────────────────
@@ -572,6 +804,36 @@ async def run_pipeline():
 def _short_dir(date: str, index: int) -> Path:
     return OUTPUT_DIR / date / f"short_{index:02d}"
 
+def _ensure_short_thumbnail(short_dir: Path) -> bool:
+    """
+    Self-heal: some older Shorts finished rendering short.mp4 but the process
+    died/crashed before the final thumbnail-capture step ran, leaving them
+    stuck on the generic placeholder forever. If short.mp4 exists but
+    thumbnail.jpg doesn't, extract one now (cached to disk — runs once).
+    Returns whether a thumbnail exists after this call.
+    """
+    thumb = short_dir / "thumbnail.jpg"
+    if thumb.exists():
+        return True
+    video = short_dir / "short.mp4"
+    if not video.exists():
+        return False
+    # A render still actively writing this file will always look "invalid"
+    # to ffmpeg mid-write — don't hammer it every ~8s poll while it's hot.
+    if time.time() - video.stat().st_mtime < 30:
+        return False
+    try:
+        import moviepy as mpe
+        from PIL import Image
+        clip = mpe.VideoFileClip(str(video))
+        frame_t = min(0.5, clip.duration / 2) if clip.duration else 0
+        Image.fromarray(clip.get_frame(frame_t)).save(str(thumb), "JPEG", quality=90)
+        clip.close()
+        return True
+    except Exception as e:
+        log.warning("Thumbnail self-heal failed for %s: %s", short_dir, e)
+        return False
+
 @app.get("/api/shorts")
 async def list_shorts(date: Optional[str] = None):
     target = date or _today()
@@ -581,6 +843,7 @@ async def list_shorts(date: Optional[str] = None):
         dirs = sorted(d for d in today_dir.iterdir() if d.is_dir() and d.name.startswith("short_"))
         for d in dirs:
             index = int(d.name.split("_")[1])
+            has_thumbnail = _ensure_short_thumbnail(d)
             script_path = d / "script.json"
             title = d.name
             description = ""
@@ -605,13 +868,14 @@ async def list_shorts(date: Optional[str] = None):
                 "tags": tags,
                 "status": _short_status(d),
                 "has_video": (d / "short.mp4").exists(),
-                "has_thumbnail": (d / "thumbnail.jpg").exists(),
+                "has_thumbnail": has_thumbnail,
                 "has_script": script_path.exists(),
                 "thumbnail_url": f"/api/shorts/{target}/{index}/thumbnail",
                 "video_url": f"/api/shorts/{target}/{index}/video",
                 "script_url": f"/api/shorts/{target}/{index}/script",
                 "youtube_id": yt_id,
                 "youtube_url": yt_url,
+                "is_regenerating": _regen_running(_regen_key("short", target, index)),
             })
     return {
         "date": target,
@@ -621,7 +885,10 @@ async def list_shorts(date: Optional[str] = None):
 
 @app.get("/api/shorts/{date}/{index}/thumbnail")
 async def serve_short_thumbnail(date: str, index: int):
-    path = _short_dir(date, index) / "thumbnail.jpg"
+    short_dir = _short_dir(date, index)
+    path = short_dir / "thumbnail.jpg"
+    if not path.exists():
+        _ensure_short_thumbnail(short_dir)
     if not path.exists():
         raise HTTPException(404, "Thumbnail not found")
     return FileResponse(path, media_type="image/jpeg")
@@ -641,25 +908,71 @@ async def serve_short_script(date: str, index: int):
     return json.loads(path.read_text(encoding="utf-8"))
 
 class GenerateShortPayload(BaseModel):
-    feed: str = "india"  # "india" | "world" | "business"
+    feed: str = "india"           # "india" | "world" | "business" — ignored if topic is set
+    topic: str = ""               # custom topic; overrides feed when non-empty
+    locale: str = DEFAULT_LOCALE  # region/language target (pipeline/locales.py)
+    count: int = 1                # how many Shorts to generate in this run (batch mode)
 
 @app.post("/api/shorts/generate")
 async def generate_short(payload: GenerateShortPayload):
     global _short_proc
 
-    if payload.feed not in ("india", "world", "business"):
+    topic = payload.topic.strip()
+    if not topic and payload.feed not in ("india", "world", "business"):
         raise HTTPException(400, "feed must be one of: india, world, business")
+    if payload.locale not in LOCALES:
+        raise HTTPException(400, f"Unknown locale '{payload.locale}'")
+    count = max(1, min(payload.count, 10))
 
     if _short_proc_running() or _short_lock_pid_alive():
         return {"ok": False, "message": "A Short is already being generated"}
 
+    args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--locale", payload.locale, "--count", str(count)]
+    if topic:
+        args += ["--topic", topic]
+    else:
+        args += ["--feed", payload.feed]
+
     _short_proc = subprocess.Popen(
-        [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--feed", payload.feed],
+        args,
         cwd=str(BASE_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    return {"ok": True, "pid": _short_proc.pid, "message": "Short generation started"}
+    return {"ok": True, "pid": _short_proc.pid,
+            "message": f"Generating {count} Short(s) ({payload.locale})" if count > 1 else "Short generation started"}
+
+
+class RegenerateShortPayload(BaseModel):
+    feed: str = "india"
+    topic: str = ""
+    locale: str = DEFAULT_LOCALE
+
+@app.post("/api/shorts/{date}/{index}/regenerate")
+async def regenerate_short(date: str, index: int, payload: RegenerateShortPayload):
+    """Regenerate an existing Short in place (new script + render, no auto-upload)."""
+    key = _regen_key("short", date, index)
+    if _regen_running(key) or _short_proc_running() or _short_lock_pid_alive():
+        return {"ok": False, "message": "A Short generation/regeneration is already in progress"}
+
+    topic = payload.topic.strip()
+    if not topic and payload.feed not in ("india", "world", "business"):
+        raise HTTPException(400, "feed must be one of: india, world, business")
+    if payload.locale not in LOCALES:
+        raise HTTPException(400, f"Unknown locale '{payload.locale}'")
+
+    args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--date", date, "--index", str(index),
+            "--locale", payload.locale]
+    args += ["--topic", topic] if topic else ["--feed", payload.feed]
+
+    proc = subprocess.Popen(
+        args,
+        cwd=str(BASE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    _regen_procs[key] = proc
+    return {"ok": True, "pid": proc.pid, "message": f"Regenerating short {index}"}
 
 @app.post("/api/shorts/upload/{date}/{index}")
 async def upload_generated_short(date: str, index: int):
@@ -757,6 +1070,7 @@ class SettingsPayload(BaseModel):
     TTS_VOICE: Optional[str] = None
     TTS_RATE: Optional[str] = None
     TTS_PITCH: Optional[str] = None
+    SHORTS_PER_DAY: Optional[str] = None
 
 @app.get("/api/settings")
 async def get_settings():
@@ -768,6 +1082,7 @@ async def get_settings():
         "TTS_VOICE": env.get("TTS_VOICE", "hi-IN-MadhurNeural"),
         "TTS_RATE": env.get("TTS_RATE", "-5%"),
         "TTS_PITCH": env.get("TTS_PITCH", "-8Hz"),
+        "SHORTS_PER_DAY": env.get("SHORTS_PER_DAY", "5"),
         "upload_slots": UPLOAD_SLOTS,
     }
 
@@ -803,11 +1118,45 @@ async def serve_script(date: str, index: int):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ── Community-post drafts + engagement automation ───────────────────────────────
+# YouTube's Community tab has no public API, so these drafts are for a human
+# to copy into YouTube Studio/the app. The auto-CTA-comment side of this
+# feature (which IS real and automated) runs on its own background loop —
+# see _engagement_loop() above and pipeline/engagement.py.
+
+@app.get("/api/community-posts")
+async def get_community_posts():
+    from pipeline.engagement import list_drafts
+    return {"drafts": list_drafts()}
+
+@app.post("/api/community-posts/{draft_id}/dismiss")
+async def dismiss_community_post(draft_id: str):
+    from pipeline.engagement import dismiss_draft
+    ok = dismiss_draft(draft_id)
+    if not ok:
+        raise HTTPException(404, "Draft not found")
+    return {"ok": True}
+
+@app.post("/api/community-posts/generate")
+async def generate_community_post_now():
+    """Force an engagement pass right now instead of waiting for the next poll tick."""
+    from pipeline.engagement import run_engagement_pass
+    result = await asyncio.to_thread(run_engagement_pass)
+    return {"ok": True, **result}
+
+
 # ── WebSocket log stream ────────────────────────────────────────────────────────
 
 @app.websocket("/ws/logs")
 async def ws_logs(websocket: WebSocket):
     """Stream new lines from pipeline.log in real time."""
+    # HTTP middleware doesn't run for websocket connections, so auth is
+    # checked here directly. Browsers can't set custom headers on a
+    # WebSocket handshake, so the token travels as a query param.
+    token = websocket.query_params.get("token", "")
+    if not auth_module.get_user_for_session(token):
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     try:
         for line in _tail_log(50):

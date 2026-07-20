@@ -40,14 +40,16 @@ from config import (
     UPLOAD_SLOTS_IST,
     GENERATION_LEAD_HOURS,
 )
+from generate_short_now import build_short_script
 from pipeline.image_fetcher import fetch_all_section_images
+from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
 from pipeline.logger import log
-from pipeline.news_fetcher import get_breaking_headlines
-from pipeline.script_generator import generate_script, generate_shorts_script
+from pipeline.script_generator import generate_script
 from pipeline.shorts_creator import create_short
+from pipeline.text_utils import safe_truncate
 from pipeline.trends import get_trending_topics
 from pipeline.uploader import upload_thumbnail, upload_video
-from pipeline.video_creator import build_chapters, create_thumbnail, create_video
+from pipeline.video_creator import VIDEO_CLIP_EXTS, build_chapters, create_thumbnail, create_video
 from pipeline.voice_generator import generate_section_voices
 
 TOPIC_CONFIG_FILE = BASE_DIR / "topic_config.json"
@@ -73,20 +75,42 @@ def _pid_running(pid: int) -> bool:
         return False
 
 
+def _try_create_lock() -> bool:
+    """Atomically create the lock file with our PID. False if it already exists —
+    O_CREAT|O_EXCL is a single kernel syscall, so two processes racing to create
+    it can never both succeed (unlike a separate exists-check + write)."""
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(str(os.getpid()))
+        return True
+    except FileExistsError:
+        return False
+
+
 def _acquire_lock() -> bool:
     """Return True if lock was acquired, False if another run is in progress."""
-    if LOCK_FILE.exists():
-        try:
-            pid = int(LOCK_FILE.read_text().strip())
-            if _pid_running(pid):
-                log.warning("Another pipeline is running (PID %d) — aborting this run.", pid)
-                return False
-            log.info("Removing stale lock file (PID %d no longer running).", pid)
-        except Exception:
-            pass
-        LOCK_FILE.unlink(missing_ok=True)
-    LOCK_FILE.write_text(str(os.getpid()))
-    return True
+    if _try_create_lock():
+        return True
+
+    # Lock file already exists — check whether it's stale (dead PID) and, if
+    # so, clear it and retry once. Two racing processes can both reach here
+    # and both try to remove the file, but only one of the retried
+    # _try_create_lock() calls can win the exclusive-create race.
+    try:
+        pid = int(LOCK_FILE.read_text().strip())
+        if _pid_running(pid):
+            log.warning("Another pipeline is running (PID %d) — aborting this run.", pid)
+            return False
+        log.info("Removing stale lock file (PID %d no longer running).", pid)
+    except Exception:
+        pass
+    LOCK_FILE.unlink(missing_ok=True)
+
+    if _try_create_lock():
+        return True
+    log.warning("Lost the race to acquire pipeline.lock — another run just started. Aborting.")
+    return False
 
 
 def _release_lock():
@@ -183,40 +207,44 @@ def _load_slot_plan() -> list[dict]:
         else:
             topic = None   # will fetch from trends / fallback below
 
+        locale = get_locale(slot_cfg.get("locale") or DEFAULT_LOCALE)
+
         plan.append({
             "slot":            slot_str,
             "topic":           topic,
             "category":        cat_key,
+            "category_color":  cat_info.get("color", ""),
             "search_query":    cat_info.get("search_query", ""),
             "category_style":  cat_info.get("prompt_style", ""),
             "yt_category_id":  cat_info.get("yt_category_id", "25"),
             "fallback_topics": cat_info.get("fallback_topics", []),
+            "locale":          locale,
         })
 
-    # For slots without a fixed topic, fetch trends grouped by unique search_query
+    # For slots without a fixed topic, fetch trends grouped by (search_query, locale)
     needs_fetch = [p for p in plan if p["topic"] is None]
     if needs_fetch:
-        # group by search_query to minimise API calls
         from collections import defaultdict
-        by_query: dict[str, list] = defaultdict(list)
+        by_query: dict[tuple, list] = defaultdict(list)
         for p in needs_fetch:
-            by_query[p["search_query"] or "general"].append(p)
+            by_query[(p["search_query"] or "general", p["locale"].code)].append(p)
 
-        for query, slots_needing in by_query.items():
+        for (query, locale_code), slots_needing in by_query.items():
             n = len(slots_needing)
+            locale = slots_needing[0]["locale"]
             fetched: list[str] = []
             if query and query != "general":
                 try:
                     from pytrends.request import TrendReq
-                    pt = TrendReq(hl="hi-IN", tz=330, timeout=(10, 30))
-                    df = pt.trending_searches(pn="india")
+                    pt = TrendReq(hl=locale.news_hl, tz=330, timeout=(10, 30))
+                    df = pt.trending_searches(pn=locale.trends_pn)
                     all_trends = [str(t).strip() for t in df[0].dropna().tolist() if t]
                     # Try to find trends that match the query keywords
                     keywords = query.lower().split()
                     matched = [t for t in all_trends if any(k in t.lower() for k in keywords)]
                     fetched = (matched or all_trends)[:n]
                 except Exception as e:
-                    log.warning("Trends fetch failed for query '%s': %s", query, e)
+                    log.warning("Trends fetch failed for query '%s' (locale=%s): %s", query, locale_code, e)
 
             for j, p in enumerate(slots_needing):
                 if j < len(fetched):
@@ -226,9 +254,9 @@ def _load_slot_plan() -> list[dict]:
                     if fallbacks:
                         p["topic"] = _random.choice(fallbacks)
                     else:
-                        # final fallback: general trending
-                        general = get_trending_topics(1)
-                        p["topic"] = general[0] if general else f"India news today {i+1}"
+                        # final fallback: general trending for this slot's locale
+                        general = get_trending_topics(1, locale=p["locale"])
+                        p["topic"] = general[0] if general else f"{p['locale'].label} news today"
 
     return plan
 
@@ -242,17 +270,20 @@ def _append_chapters_to_description(script: dict, voices: list) -> dict:
 
 
 def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
-                      category_style: str = "", voice_rate: str | None = None) -> dict | None:
+                      category_style: str = "", voice_rate: str | None = None,
+                      category: str = "", category_color: str = "",
+                      locale: Locale | None = None) -> dict | None:
     """Full pipeline for one trending topic. Returns video metadata or None."""
+    locale = locale or get_locale(None)
     work_dir = base_dir / f"video_{index:02d}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info("[%d] Starting: %s", index, topic)
+    log.info("[%d] Starting (locale=%s): %s", index, locale.code, topic)
 
     try:
         # 1. Script
-        log.info("[%d] Generating Hindi script...", index)
-        script = generate_script(topic, category_style=category_style)
+        log.info("[%d] Generating script...", index)
+        script = generate_script(topic, category_style=category_style, locale=locale)
         log.info("[%d] Title: %s", index, script["title"])
 
         # 2. Voice
@@ -261,6 +292,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             script["sections"],
             str(work_dir / "voices"),
             rate=voice_rate,
+            locale=locale,
         )
         script = _append_chapters_to_description(script, voices)
 
@@ -272,22 +304,28 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             str(work_dir / "images"),
         )
 
-        # 4. Persist script for the dashboard API
+        # 4. Persist script for the dashboard API (locale tag lets the
+        # engagement-comment/Community-post automation pick the right language)
+        script["_locale"] = locale.code
         import json as _json
         with open(work_dir / "script.json", "w", encoding="utf-8") as _f:
             _json.dump(script, _f, ensure_ascii=False, indent=2)
 
         # 5. Thumbnail — news-style composite built from this video's own images
+        # (video clips are excluded — create_thumbnail needs real still images)
         thumbnail_path = str(work_dir / "thumbnail.jpg")
-        flat_images = [p for section in images for p in section if p]
+        flat_images = [
+            p for section in images for p in section
+            if p and not p.lower().endswith(VIDEO_CLIP_EXTS)
+        ]
         # Spread picks across sections for visual variety
         picks = flat_images[:: max(1, len(flat_images) // 3)][:3] if flat_images else []
-        create_thumbnail(script, thumbnail_path, image_paths=picks)
+        create_thumbnail(script, thumbnail_path, image_paths=picks, locale=locale, category_color=category_color)
 
         # 5. Video
         video_path = str(work_dir / "final.mp4")
         log.info("[%d] Rendering video...", index)
-        create_video(script, voices, images, video_path)
+        create_video(script, voices, images, video_path, category=category, locale=locale)
         log.info("[%d] Video ready: %s", index, video_path)
 
         return {
@@ -297,6 +335,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             "description":    script.get("description", ""),
             "tags":           script.get("tags", []),
             "slot":           slot_str,
+            "yt_language":    locale.yt_language,
         }
 
     except Exception as exc:
@@ -336,6 +375,9 @@ def run_pipeline():
             base_dir=base_dir,
             category_style=plan.get("category_style", ""),
             voice_rate=rate,
+            category=plan.get("category", ""),
+            category_color=plan.get("category_color", ""),
+            locale=plan.get("locale"),
         )
         if meta:
             meta["yt_category_id"] = plan.get("yt_category_id", "25")
@@ -357,6 +399,7 @@ def run_pipeline():
                 description=v["description"],
                 tags=v["tags"],
                 publish_at_utc=publish_utc,
+                yt_language=v.get("yt_language", "hi"),
             )
             upload_thumbnail(vid_id, v["thumbnail_path"])
         except Exception as e:
@@ -392,33 +435,33 @@ def _run_shorts(base_dir: Path):
     log.info("-" * 60)
     log.info("Generating %d YouTube Shorts...", SHORTS_PER_DAY)
 
-    for i, plan in enumerate(_SHORTS_PLAN[:SHORTS_PER_DAY], start=1):
+    for i in range(1, SHORTS_PER_DAY + 1):
+        plan = _SHORTS_PLAN[(i - 1) % len(_SHORTS_PLAN)]
         work_dir = base_dir / f"short_{i:02d}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
+        locale = get_locale(plan.get("locale") or DEFAULT_LOCALE)
         try:
-            # 1. Real headlines from the last 48 h
-            headlines = get_breaking_headlines(plan["feed"], max_age_hours=48, limit=15)
-            if len(headlines) < 3:
-                log.warning("Short %d: only %d fresh headlines for feed '%s' — skipping",
-                            i, len(headlines), plan["feed"])
+            # 1-2. Real headlines + script (Claude → OpenRouter → Gemini chain)
+            try:
+                script = build_short_script(feed=plan["feed"], locale=locale)
+            except ValueError as exc:
+                log.warning("Short %d: %s — skipping", i, exc)
                 continue
 
-            # 2. Script (Claude → OpenRouter → Gemini chain)
-            script = generate_shorts_script(headlines, focus=plan["focus"])
-
+            script["_locale"] = locale.code
             import json as _json
             with open(work_dir / "script.json", "w", encoding="utf-8") as _f:
                 _json.dump(script, _f, ensure_ascii=False, indent=2)
 
             # 3. Render vertical short (voice at 1.5x inside)
-            video_path = create_short(script, str(work_dir))
+            video_path = create_short(script, str(work_dir), category="news", locale=locale)
 
             # 4. Upload with a scheduled publish slot
             slot = SHORTS_UPLOAD_SLOTS[(i - 1) % len(SHORTS_UPLOAD_SLOTS)]
             title = script.get("title", f"आज की बड़ी खबरें {i}")
             if "#shorts" not in title.lower():
-                title = (title[:82] + " #Shorts")
+                title = safe_truncate(title, 82, suffix=" #Shorts")
             log.info("Uploading Short %d: %s → %s IST", i, title[:60], slot)
             upload_video(
                 video_path=video_path,
@@ -426,6 +469,7 @@ def _run_shorts(base_dir: Path):
                 description=script.get("description", "#Shorts #News"),
                 tags=script.get("tags", []),
                 publish_at_utc=_ist_slot_to_utc(slot),
+                yt_language=locale.yt_language,
             )
         except Exception as e:
             log.error("Short %d failed: %s", i, e, exc_info=True)

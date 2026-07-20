@@ -21,10 +21,21 @@ import moviepy as mpe
 
 from config import (
     BG_MUSIC_PATH, BG_MUSIC_VOLUME,
-    HINDI_FONT_BOLD, HINDI_FONT_REGULAR,
     SLIDE_COLORS, VIDEO_FPS, VIDEO_HEIGHT, VIDEO_WIDTH, VIDEO_BITRATE,
 )
+from pipeline.locales import Locale, get_locale
 from pipeline.logger import log
+from pipeline.music_fetcher import get_music_for_category
+
+VIDEO_CLIP_EXTS = (".mp4", ".mov", ".webm", ".m4v")  # public: also used by scheduler.py to filter thumbnail picks
+
+
+def _resolve_music_path(category: str) -> Optional[str]:
+    """Vibe-matched track for this category, falling back to the fixed track."""
+    path = get_music_for_category(category)
+    if path:
+        return path
+    return BG_MUSIC_PATH if os.path.exists(BG_MUSIC_PATH) else None
 
 # ─── Devanagari rendering fix ─────────────────────────────────────────────────
 # Pillow only fully shapes complex scripts (Devanagari, Arabic, ...) when the
@@ -46,6 +57,64 @@ _PREBASE_MATRA_RE = re.compile(
 def _fix_devanagari(text: str) -> str:
     """Reorder Devanagari pre-base vowel signs for correct rendering without raqm."""
     return _PREBASE_MATRA_RE.sub(lambda m: m.group(2) + m.group(1), text)
+
+
+# ─── Multi-script text shaping/wrapping ───────────────────────────────────────
+# PIL draws every codepoint left-to-right in logical order with no script
+# shaping. That's fine for most Latin-based scripts, but three families need
+# help: Devanagari (see _fix_devanagari above), Arabic (needs letter-joining
+# reshaping, verified via arabic_reshaper), and Arabic/Hebrew both need their
+# word order reversed for correct RTL display (verified via python-bidi's
+# get_display — this is the standard technique for RTL text in non-BiDi-aware
+# renderers). CJK/Thai have no spaces between words, so they wrap by
+# character instead of by word.
+
+def _shape_text(text: str, locale: Locale) -> str:
+    """
+    Prepare one line of already-wrapped text for PIL's naive LTR glyph
+    drawing. Must be called per-line, AFTER wrapping — BiDi reordering is
+    only correct within a single line/paragraph scope.
+    """
+    script = locale.script
+    if script == "devanagari":
+        return _fix_devanagari(text)
+    if script == "arabic":
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        return get_display(arabic_reshaper.reshape(text))
+    if script == "hebrew":
+        from bidi.algorithm import get_display
+        return get_display(text)
+    return text
+
+
+def _wrap_chars(text: str, font: ImageFont.FreeTypeFont, max_px: int) -> list[str]:
+    """Character-based wrapping for scripts without spaces (CJK, Thai)."""
+    lines, cur = [], ""
+    for ch in text:
+        test = cur + ch
+        if font.getbbox(test)[2] <= max_px:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = ch
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _wrap_localized(text: str, font: ImageFont.FreeTypeFont, max_px: int, locale: Locale) -> list[str]:
+    """Word-wrap (most scripts) or character-wrap (CJK/Thai), by locale."""
+    if locale.script_profile.wrap_mode == "char":
+        return _wrap_chars(text, font, max_px)
+    return _wrap(text, font, max_px)
+
+
+def _shaped_lines(text: str, font: ImageFont.FreeTypeFont, max_px: int, locale: Locale) -> list[str]:
+    """Wrap then shape each line — the drop-in replacement for the old
+    `[_fix_devanagari(l) for l in _wrap(text, font, max_px)]` pattern."""
+    return [_shape_text(line, locale) for line in _wrap_localized(text, font, max_px, locale)]
 
 
 # ─── Colour / image helpers ───────────────────────────────────────────────────
@@ -144,6 +213,34 @@ def _ken_burns_clip(oversized: np.ndarray, duration: float, move_index: int,
     return mpe.VideoClip(_frame, duration=duration).with_fps(VIDEO_FPS)
 
 
+def _video_cover_clip(path: str, duration: float, size: tuple[int, int]) -> Optional[mpe.VideoClip]:
+    """
+    Load a stock video clip, mute it, loop/trim to duration, and scale +
+    center-crop it to exactly fill size (cover-fit, same idea as _cover_crop
+    for still images). Returns None if the file can't be used as video.
+    """
+    w, h = size
+    try:
+        clip = mpe.VideoFileClip(path).without_audio()
+        if clip.duration <= 0:
+            clip.close()
+            return None
+        if clip.duration < duration:
+            loops = int(duration / clip.duration) + 1
+            clip = mpe.concatenate_videoclips([clip] * loops)
+        clip = clip.subclipped(0, duration)
+
+        scale = max(w / clip.w, h / clip.h)
+        clip = clip.resized(scale)
+        x1 = (clip.w - w) / 2
+        y1 = (clip.h - h) / 2
+        clip = clip.cropped(x1=x1, y1=y1, x2=x1 + w, y2=y1 + h)
+        return clip.with_fps(VIDEO_FPS)
+    except Exception as exc:
+        log.warning("Video clip background failed (%s): %s", path, exc)
+        return None
+
+
 def _card_motion_clip(card: np.ndarray, duration: float) -> mpe.VideoClip:
     """Gentle push-in for full-frame cards (title/outro): upscale once, zoom in."""
     ow = int(VIDEO_WIDTH * _KB_OVERSCAN)
@@ -152,15 +249,93 @@ def _card_motion_clip(card: np.ndarray, duration: float) -> mpe.VideoClip:
     return _ken_burns_clip(oversized, duration, move_index=0)  # zoom_in
 
 
+# ─── Engagement icons (subscribe/like/bell) ───────────────────────────────────
+# Public: also used by shorts_creator.py to draw a matching outro on Shorts.
+
+def draw_bell_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, r: int,
+                   color: tuple = (255, 255, 255)) -> None:
+    """Simple bell silhouette centered at (cx, cy) with 'radius' r."""
+    draw.pieslice([cx - r, cy - r, cx + r, cy + int(r * 0.25)], 180, 360, fill=color)
+    draw.rectangle([cx - r, cy - int(r * 0.05), cx + r, cy + int(r * 0.55)], fill=color)
+    draw.polygon([
+        (cx - r, cy + int(r * 0.55)), (cx + r, cy + int(r * 0.55)),
+        (cx + int(r * 1.3), cy + int(r * 0.9)), (cx - int(r * 1.3), cy + int(r * 0.9)),
+    ], fill=color)
+    draw.rectangle([cx - int(r * 0.22), cy + int(r * 0.9), cx + int(r * 0.22), cy + int(r * 1.15)], fill=color)
+    draw.ellipse([cx - int(r * 0.22), cy + int(r * 1.08), cx + int(r * 0.22), cy + int(r * 1.5)], fill=color)
+
+
+def draw_thumbsup_icon(canvas: Image.Image, cx: int, cy: int, r: int,
+                       color: tuple = (255, 255, 255)) -> None:
+    """Simplified thumbs-up glyph (fist + rotated thumb) composited onto canvas (RGB or RGBA)."""
+    fw, fh = int(r * 1.5), int(r * 1.15)
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    fx0, fy0 = cx - fw // 2, cy - int(r * 0.1)
+    ld.rounded_rectangle([fx0, fy0, fx0 + fw, fy0 + fh], radius=int(fh * 0.3), fill=color)
+
+    tw, th = int(r * 0.55), int(r * 1.3)
+    thumb = Image.new("RGBA", (tw * 3, th * 2), (0, 0, 0, 0))
+    td = ImageDraw.Draw(thumb)
+    td.rounded_rectangle([tw, 0, tw * 2, th], radius=tw // 2, fill=color)
+    thumb = thumb.rotate(-24, resample=Image.BICUBIC, expand=True)
+    layer.paste(thumb, (fx0 - thumb.width // 4, fy0 - int(th * 0.55)), thumb)
+
+    if canvas.mode == "RGBA":
+        canvas.alpha_composite(layer)
+    else:
+        canvas.paste(layer, (0, 0), layer)
+
+
+def draw_engagement_row(canvas: Image.Image, locale: Locale, cy: int, scale: float = 1.0) -> None:
+    """
+    Draw a horizontal LIKE + SUBSCRIBE engagement row (icons + labels) centered
+    on canvas at vertical position cy. Used by both the long-form outro card
+    and the Shorts outro. Button copy is deliberately plain "LIKE"/"SUBSCRIBE"
+    (English) — matching the iconography of YouTube's own UI buttons, which
+    creators worldwide reuse regardless of the video's spoken language.
+    """
+    W = canvas.width
+    canvas_rgba = canvas.convert("RGBA") if canvas.mode != "RGBA" else canvas
+    draw = ImageDraw.Draw(canvas_rgba, "RGBA")
+    f_label = _load_font(locale.font_bold, int(34 * scale))
+
+    # LIKE badge (dark circle + white thumbs-up + label)
+    like_r = int(58 * scale)
+    like_cx = W // 2 - int(190 * scale)
+    draw.ellipse([like_cx - like_r, cy - like_r, like_cx + like_r, cy + like_r],
+                 fill=(35, 35, 40, 235), outline=(255, 255, 255, 230), width=4)
+    draw_thumbsup_icon(canvas_rgba, like_cx, cy - int(6 * scale), int(26 * scale), color=(255, 255, 255))
+    like_label = "LIKE"
+    lw = f_label.getbbox(like_label)[2]
+    draw.text((like_cx - lw // 2, cy + like_r + 10), like_label, font=f_label,
+               fill=(255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0))
+
+    # SUBSCRIBE pill (red button + bell + label) — the visual centerpiece
+    sub_cx = W // 2 + int(60 * scale)
+    pill_w, pill_h = int(260 * scale), int(84 * scale)
+    px0, py0 = sub_cx - pill_w // 2, cy - pill_h // 2
+    draw.rounded_rectangle([px0, py0, px0 + pill_w, py0 + pill_h], radius=pill_h // 2,
+                            fill=(214, 24, 24, 245), outline=(255, 255, 255, 200), width=3)
+    draw_bell_icon(draw, px0 + int(46 * scale), cy, int(15 * scale), color=(255, 255, 255))
+    sub_label = "SUBSCRIBE"
+    f_sub = _load_font(locale.font_bold, int(30 * scale))
+    sw = f_sub.getbbox(sub_label)[2]
+    draw.text((px0 + int(78 * scale), cy - f_sub.size // 2 - 4), sub_label, font=f_sub, fill=(255, 255, 255))
+
+    if canvas.mode != "RGBA":
+        canvas.paste(canvas_rgba.convert(canvas.mode))
+
+
 # ─── Slide renderers ──────────────────────────────────────────────────────────
 
-def _title_card(title: str, thumbnail_text: str, colors: tuple) -> np.ndarray:
+def _title_card(title: str, thumbnail_text: str, colors: tuple, locale: Locale) -> np.ndarray:
     bg = Image.fromarray(_gradient(*colors)).convert("RGB")
     draw = ImageDraw.Draw(bg)
-    f_title = _load_font(HINDI_FONT_BOLD, 88)
-    f_sub   = _load_font(HINDI_FONT_REGULAR, 50)
+    f_title = _load_font(locale.font_bold, 88)
+    f_sub   = _load_font(locale.font_regular, 50)
 
-    lines   = [_fix_devanagari(l) for l in _wrap(title, f_title, VIDEO_WIDTH - 200)]
+    lines   = _shaped_lines(title, f_title, VIDEO_WIDTH - 200, locale)
     total_h = len(lines) * 108
     y       = (VIDEO_HEIGHT - total_h) // 2 - 60
 
@@ -175,7 +350,7 @@ def _title_card(title: str, thumbnail_text: str, colors: tuple) -> np.ndarray:
                     (VIDEO_WIDTH // 2 + 220, bar_y + 4)], fill=(79, 195, 247))
 
     if thumbnail_text:
-        thumbnail_text = _fix_devanagari(thumbnail_text)
+        thumbnail_text = _shape_text(thumbnail_text, locale)
         tw = f_sub.getbbox(thumbnail_text)[2]
         draw.text(((VIDEO_WIDTH - tw) // 2, bar_y + 20), thumbnail_text,
                   font=f_sub, fill=(79, 195, 247))
@@ -204,22 +379,28 @@ def _section_slide(
     return np.array(bg)
 
 
-def _outro_card() -> np.ndarray:
+def _outro_card(locale: Locale) -> np.ndarray:
     bg   = Image.fromarray(_gradient("#000428", "#004e92")).convert("RGB")
     draw = ImageDraw.Draw(bg)
-    f1   = _load_font(HINDI_FONT_BOLD, 78)
-    f2   = _load_font(HINDI_FONT_REGULAR, 48)
+    f1   = _load_font(locale.font_bold, 66)
+    f2   = _load_font(locale.font_regular, 40)
 
-    msg1 = _fix_devanagari("चैनल को Subscribe करें")
-    msg2 = _fix_devanagari("Like, Share और घंटी दबाना न भूलें!")
+    msg1 = _shape_text(locale.subscribe_cta, locale)
+    msg2 = _shape_text(locale.like_share_cta, locale)
 
     w1   = f1.getbbox(msg1)[2]
     w2   = f2.getbbox(msg2)[2]
 
-    draw.text(((VIDEO_WIDTH - w1) // 2, VIDEO_HEIGHT // 2 - 100),
+    draw.text(((VIDEO_WIDTH - w1) // 2, VIDEO_HEIGHT // 2 - 210),
               msg1, font=f1, fill=(255, 68, 68),
               stroke_width=2, stroke_fill=(0, 0, 0))
-    draw.text(((VIDEO_WIDTH - w2) // 2, VIDEO_HEIGHT // 2 + 30),
+
+    # Big visual LIKE + SUBSCRIBE row — the actual click-drivers; the
+    # localized sentences above/below are supporting copy, not the CTA itself.
+    draw_engagement_row(bg, locale, VIDEO_HEIGHT // 2 - 40, scale=1.5)
+
+    draw = ImageDraw.Draw(bg)
+    draw.text(((VIDEO_WIDTH - w2) // 2, VIDEO_HEIGHT // 2 + 140),
               msg2, font=f2, fill=(255, 255, 255))
 
     return np.array(bg)
@@ -268,14 +449,20 @@ def _build_section_clip(
 
     sub_clips: list[mpe.VideoClip] = []
     for j, img_path in enumerate(images):
-        frame = _section_slide(
-            section["heading"],
-            section["narration"],
-            img_path,
-            color_pair,
-            size=(ow, oh),
-        )
-        clip = _ken_burns_clip(frame, sub_dur, move_index=move_offset + j)
+        clip = None
+        if img_path and img_path.lower().endswith(VIDEO_CLIP_EXTS):
+            clip = _video_cover_clip(img_path, sub_dur, (VIDEO_WIDTH, VIDEO_HEIGHT))
+
+        if clip is None:
+            frame = _section_slide(
+                section["heading"],
+                section["narration"],
+                img_path,
+                color_pair,
+                size=(ow, oh),
+            )
+            clip = _ken_burns_clip(frame, sub_dur, move_index=move_offset + j)
+
         if j > 0:
             clip = clip.with_effects([mpe.vfx.CrossFadeIn(_XFADE)])
         sub_clips.append(clip)
@@ -302,22 +489,62 @@ def _cover_crop(img: Image.Image, w: int, h: int) -> Image.Image:
     return img.crop((left, top, left + w, top + h))
 
 
+def _diagonal_stamp(canvas: Image.Image, text: str, font: ImageFont.FreeTypeFont,
+                    color: tuple, cx: int, cy: int, angle: float = -14) -> None:
+    """Paste a rotated 'impact stamp' ribbon (colored bg + white bold text) onto canvas."""
+    pad_x, pad_y = 34, 16
+    tb = font.getbbox(text)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    ribbon = Image.new("RGBA", (tw + pad_x * 2, th + pad_y * 2), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(ribbon)
+    rd.rectangle([(0, 0), (ribbon.width, ribbon.height)], fill=(*color, 235))
+    rd.rectangle([(0, 0), (ribbon.width, ribbon.height)], outline=(255, 255, 255, 220), width=3)
+    rd.text((pad_x - tb[0], pad_y - tb[1]), text, font=font, fill=(255, 255, 255, 255))
+    ribbon = ribbon.rotate(angle, expand=True, resample=Image.BICUBIC)
+
+    # Drop shadow
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    shadow.paste(Image.new("RGBA", ribbon.size, (0, 0, 0, 110)), (cx - ribbon.width // 2 + 6, cy - ribbon.height // 2 + 6), ribbon)
+    canvas.alpha_composite(shadow) if canvas.mode == "RGBA" else canvas.paste(shadow, (0, 0), shadow)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    layer.paste(ribbon, (cx - ribbon.width // 2, cy - ribbon.height // 2), ribbon)
+    if canvas.mode == "RGBA":
+        canvas.alpha_composite(layer)
+    else:
+        canvas.paste(layer, (0, 0), layer)
+
+
 def create_thumbnail(script: dict, output_path: str,
-                     image_paths: Optional[list[str]] = None) -> str:
+                     image_paths: Optional[list[str]] = None,
+                     locale: Optional[Locale] = None,
+                     category_color: str = "") -> str:
     """
-    Render a dramatic news-style composite thumbnail (1280×720):
-    2-3 of the video's own images side by side, dark bottom gradient,
-    bold two-line Hindi text (white + yellow) with red accents.
-    Falls back to the plain title card when no images are available.
+    Render a punchy, tabloid-news-style composite thumbnail (1280×720):
+    2-3 of the video's own images side by side, a top badge banner, a
+    rotated "impact stamp", a solid bottom headline shelf (white + yellow
+    text with a topic-colored accent rule), in the given locale's
+    script/font. Falls back to the plain title card when no images are
+    available. `category_color` (a hex string, e.g. from topic_config.json)
+    tints the accent rule/pill so the design responds to the video's topic;
+    the dominant red/black/yellow palette stays fixed for consistent punch.
     """
+    locale = locale or get_locale(None)
     W, H = 1280, 720
-    images = [p for p in (image_paths or []) if p and os.path.exists(p)]
+    accent = _hex_to_rgb(category_color) if re.fullmatch(r"#?[0-9A-Fa-f]{6}", category_color or "") else (79, 195, 247)
+    RED = (214, 24, 24)
+
+    # Video clips can't be opened as still images — only real image files apply here.
+    images = [
+        p for p in (image_paths or [])
+        if p and os.path.exists(p) and not p.lower().endswith(VIDEO_CLIP_EXTS)
+    ]
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     if not images:
         # Fallback: old gradient title card
-        arr = _title_card(script["title"], script.get("thumbnail_text", ""), SLIDE_COLORS[0])
+        arr = _title_card(script["title"], script.get("thumbnail_text", ""), SLIDE_COLORS[0], locale)
         Image.fromarray(arr).resize((W, H), Image.LANCZOS).save(
             output_path, "JPEG", quality=92, optimize=True)
         log.info("Thumbnail saved (gradient fallback) → %s", output_path)
@@ -344,48 +571,66 @@ def create_thumbnail(script: dict, output_path: str,
     # Red separator bars between panels
     if len(images) >= 2:
         split = int(W * 0.58)
-        draw.rectangle([(split - 3, 0), (split + 3, H)], fill=(220, 30, 30))
+        draw.rectangle([(split - 3, 0), (split + 3, H)], fill=RED)
         if len(images) >= 3:
-            draw.rectangle([(split, H // 2 - 3), (W, H // 2 + 3)], fill=(220, 30, 30))
+            draw.rectangle([(split, H // 2 - 3), (W, H // 2 + 3)], fill=RED)
 
-    # Dark gradient over the bottom half for text legibility
+    # Dark gradient over the top strip and bottom half for banner legibility
     grad = Image.new("L", (1, H), 0)
     for y in range(H):
-        p = max(0.0, (y / H - 0.42) / 0.58)
-        grad.putpixel((0, y), int(210 * p))
+        bottom_p = max(0.0, (y / H - 0.42) / 0.58)
+        top_p = max(0.0, 1 - y / 92) if y < 92 else 0.0
+        grad.putpixel((0, y), int(210 * max(bottom_p, top_p * 0.85)))
     alpha = grad.resize((W, H))
     black = Image.new("RGB", (W, H), (0, 0, 0))
     canvas = Image.composite(black, canvas, alpha)
     draw = ImageDraw.Draw(canvas, "RGBA")
 
-    # "BREAKING" style badge top-left
-    f_badge = _load_font(HINDI_FONT_BOLD, 34)
-    badge_txt = _fix_devanagari("बड़ी खबर")
+    # ── Top banner: full-width badge strip with a topic-colored underline ────
+    f_badge = _load_font(locale.font_bold, 34)
+    badge_txt = _shape_text(locale.breaking_badge, locale)
     bw = f_badge.getbbox(badge_txt)[2]
-    draw.rectangle([(28, 26), (28 + bw + 36, 84)], fill=(210, 20, 20))
-    draw.text((46, 32), badge_txt, font=f_badge, fill=(255, 255, 255))
+    draw.rectangle([(0, 0), (W, 6)], fill=accent)
+    draw.rectangle([(28, 20), (28 + bw + 36, 78)], fill=RED)
+    draw.text((46, 26), badge_txt, font=f_badge, fill=(255, 255, 255))
 
-    # Two-line headline: line 1 white, line 2 yellow — split thumbnail_text
+    # ── Diagonal impact stamp (top-right corner) for extra drama ──────────────
+    canvas = canvas.convert("RGBA")
+    _diagonal_stamp(canvas, badge_txt, f_badge, RED, cx=W - 130, cy=140, angle=-16)
+    canvas = canvas.convert("RGB")
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    # Two-line headline: line 1 white, line 2 yellow — split thumbnail_text.
+    # Word-based split for scripts with spaces; character-based for CJK/Thai.
     text = (script.get("thumbnail_text") or script.get("title", "")).strip()
-    words = text.split()
-    mid = max(1, (len(words) + 1) // 2)
-    line1 = _fix_devanagari(" ".join(words[:mid]))
-    line2 = _fix_devanagari(" ".join(words[mid:]))
+    if locale.script_profile.wrap_mode == "char":
+        units = list(text)
+        sep = ""
+    else:
+        units = text.split()
+        sep = " "
+    mid = max(1, (len(units) + 1) // 2)
+    line1 = _shape_text(sep.join(units[:mid]), locale)
+    line2 = _shape_text(sep.join(units[mid:]), locale)
 
-    f_head = _load_font(HINDI_FONT_BOLD, 82)
+    f_head = _load_font(locale.font_bold, 82)
     # Shrink until both lines fit
     for size in range(82, 44, -4):
-        f_head = _load_font(HINDI_FONT_BOLD, size)
+        f_head = _load_font(locale.font_bold, size)
         if max(f_head.getbbox(line1)[2], f_head.getbbox(line2 or " ")[2]) <= W - 90:
             break
 
     line_h = int(f_head.size * 1.42)
     y = H - 60 - line_h * (2 if line2 else 1)
+
+    # Topic-colored accent rule sitting on the headline "shelf"
+    draw.rectangle([(0, y - 22), (W, y - 18)], fill=accent)
+
     for line, color in ((line1, (255, 255, 255)), (line2, (255, 214, 0))):
         if not line:
             continue
         draw.text((46, y), line, font=f_head, fill=color,
-                  stroke_width=5, stroke_fill=(0, 0, 0))
+                  stroke_width=6, stroke_fill=(0, 0, 0))
         y += line_h
 
     canvas.save(output_path, "JPEG", quality=92, optimize=True)
@@ -474,6 +719,8 @@ def create_video(
     voice_files: list[str],
     bg_images: list[list[Optional[str]]],
     output_path: str,
+    category: str = "",
+    locale: Optional[Locale] = None,
 ) -> str:
     """
     Render the complete video and write to output_path.
@@ -483,7 +730,10 @@ def create_video(
                that will be cycled through during that section.
                (Backward-compat: a flat list[str|None] is also accepted and
                wrapped automatically so old callers don't break.)
+    locale: drives on-screen text font/script/wrap + outro CTA text.
+            Defaults to Hindi/India if not given.
     """
+    locale = locale or get_locale(None)
     sections = script["sections"]
 
     # Backward-compat: if caller passes flat list[str|None], wrap each item
@@ -497,6 +747,7 @@ def create_video(
         script["title"],
         script.get("thumbnail_text", ""),
         SLIDE_COLORS[0],
+        locale,
     )
     clips.append(_card_motion_clip(title_arr, 5))
 
@@ -519,7 +770,7 @@ def create_video(
         clips.append(section_clip)
 
     # ── 3. Outro (5 s, no voice, gentle push-in) ──────────────────────────────
-    clips.append(_card_motion_clip(_outro_card(), 5))
+    clips.append(_card_motion_clip(_outro_card(locale), 5))
 
     # ── 4. Concatenate with crossfades between all top-level clips ───────────
     # Sections carry a 0.8 s silent tail, so the 0.6 s overlap never clips voice.
@@ -529,11 +780,12 @@ def create_video(
     ]
     final = mpe.concatenate_videoclips(clips, method="compose", padding=-_XFADE)
 
-    # ── 5. Background music (optional) ────────────────────────────────────────
-    if os.path.exists(BG_MUSIC_PATH):
+    # ── 5. Background music (vibe-matched to category, optional) ─────────────
+    music_path = _resolve_music_path(category)
+    if music_path:
         try:
             music = (
-                mpe.AudioFileClip(BG_MUSIC_PATH)
+                mpe.AudioFileClip(music_path)
                 .with_volume_scaled(BG_MUSIC_VOLUME)
             )
             music = _loop_audio(music, final.duration)

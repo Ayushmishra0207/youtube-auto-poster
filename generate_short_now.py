@@ -1,14 +1,18 @@
 """
 On-demand YouTube Shorts generator — used by the dashboard's "Generate Short"
-button (each click spawns this as its own subprocess via api/main.py).
+button and its per-short "Regenerate" button (each click spawns this as its
+own subprocess via api/main.py).
 
 Usage:
   python generate_short_now.py --feed india
-  python generate_short_now.py --feed world
-  python generate_short_now.py --feed business
+  python generate_short_now.py --topic "IPL 2026 auction shockers"
+  python generate_short_now.py --feed world --index 3   # regenerate short_03 in place
+  python generate_short_now.py --locale es --count 5    # 5 Spanish shorts in one run
 """
 import argparse
 import json
+import os
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,10 +20,12 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config import BASE_DIR, OUTPUT_DIR
+from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
 from pipeline.logger import log
 from pipeline.news_fetcher import get_breaking_headlines
-from pipeline.script_generator import generate_shorts_script
+from pipeline.script_generator import generate_shorts_script, generate_shorts_script_from_topic
 from pipeline.shorts_creator import create_short
+from pipeline.topic_history import filter_fresh, record_topic, recent_titles
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -30,6 +36,45 @@ _FOCUS_BY_FEED = {
 }
 
 SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
+
+
+def build_short_script(feed: str = "india", topic: str = "", locale: Locale | None = None) -> dict:
+    """
+    Generate a Shorts script from either a custom topic (creator's own
+    choice of subject) or a real breaking-news feed. Shared by the
+    "generate new" and "regenerate existing" flows.
+
+    Filters out headlines that closely match a recently-generated Short's
+    topic (pipeline.topic_history) so back-to-back generations don't keep
+    leading with the same dominant headline (e.g. the top business story
+    barely changes within a few hours) — falls back to the full headline
+    list only if filtering would leave too few to work with.
+    """
+    locale = locale or get_locale(None)
+    topic = (topic or "").strip()
+    if topic:
+        script = generate_shorts_script_from_topic(topic, locale=locale)
+        record_topic(script.get("title", ""))
+        return script
+
+    headlines = get_breaking_headlines(feed, max_age_hours=48, limit=15, locale=locale)
+    if len(headlines) < 3:
+        raise ValueError(f"Only {len(headlines)} fresh headlines for feed '{feed}' (locale={locale.code})")
+
+    fresh = filter_fresh(headlines)
+    if len(fresh) < 3:
+        log.info("Shorts topic history filtered too aggressively (%d/%d left) — using full headline list",
+                 len(fresh), len(headlines))
+        fresh = headlines
+
+    script = generate_shorts_script(
+        fresh,
+        focus=_FOCUS_BY_FEED.get(feed, "India and world breaking news"),
+        locale=locale,
+        avoid_titles=recent_titles(),
+    )
+    record_topic(script.get("title", ""))
+    return script
 
 
 def _today_output_dir() -> Path:
@@ -44,33 +89,112 @@ def _next_short_index(base_dir: Path) -> int:
     return (max(existing) + 1) if existing else 1
 
 
+def _pid_running(pid: int) -> bool:
+    """Return True if the given PID is alive (Windows-compatible)."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["tasklist", "/fi", f"PID eq {pid}", "/nh"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return str(pid) in r.stdout
+    except Exception:
+        return False
+
+
+def _try_create_lock() -> bool:
+    """Atomically create the lock file with our PID. False if it already exists —
+    O_CREAT|O_EXCL is a single kernel syscall, so two processes racing to create
+    it can never both succeed (unlike a separate exists-check + write, which is
+    exactly what let two 'Generate Short' clicks both spawn a render before
+    either had written its PID — the API's pre-spawn check alone can't close
+    that window)."""
+    try:
+        fd = os.open(str(SHORT_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(str(os.getpid()))
+        return True
+    except FileExistsError:
+        return False
+
+
+def _acquire_lock() -> bool:
+    """Return True if the lock was acquired, False if another run is genuinely in progress."""
+    if _try_create_lock():
+        return True
+
+    try:
+        pid = int(SHORT_LOCK_FILE.read_text().strip())
+        if _pid_running(pid):
+            return False
+        log.info("Removing stale short_generate.lock (PID %d no longer running)", pid)
+    except Exception:
+        pass
+    SHORT_LOCK_FILE.unlink(missing_ok=True)
+
+    return _try_create_lock()
+
+
+def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale: Locale) -> Path:
+    """Build, render, and save one Short into base_dir/short_NN. Returns work_dir."""
+    work_dir = base_dir / f"short_{index:02d}"
+    if work_dir.exists():
+        shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    source = f"topic='{topic}'" if topic.strip() else f"feed={feed}"
+    log.info("[manual-short %d] Generating (%s, locale=%s)...", index, source, locale.code)
+
+    script = build_short_script(feed=feed, topic=topic, locale=locale)
+    script["_locale"] = locale.code
+    with open(work_dir / "script.json", "w", encoding="utf-8") as f:
+        json.dump(script, f, ensure_ascii=False, indent=2)
+
+    create_short(script, str(work_dir), locale=locale)
+    log.info("[manual-short %d] Done: %s", index, work_dir)
+    return work_dir
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--feed", choices=["india", "world", "business"], default="india")
+    parser.add_argument("--topic", default="", help="Custom topic — overrides --feed when set")
+    parser.add_argument("--index", type=int, default=0,
+                        help="Regenerate this existing short_NN in place instead of creating a new one")
+    parser.add_argument("--date", default="", help="Output date folder (YYYY-MM-DD); defaults to today")
+    parser.add_argument("--locale", default=DEFAULT_LOCALE,
+                        help="Locale code for language/tags/TTS/rendering (pipeline/locales.py); default hi")
+    parser.add_argument("--count", type=int, default=1,
+                        help="Number of Shorts to generate in this run (ignored when --index is set)")
     args = parser.parse_args()
 
-    SHORT_LOCK_FILE.write_text(str(__import__("os").getpid()))
+    locale = get_locale(args.locale)
+
+    if not _acquire_lock():
+        log.warning("[manual-short] Another Short generation is already in progress — aborting this run.")
+        sys.exit(1)
     try:
-        base_dir = _today_output_dir()
-        index = _next_short_index(base_dir)
-        work_dir = base_dir / f"short_{index:02d}"
-        work_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = (Path(OUTPUT_DIR) / args.date) if args.date else _today_output_dir()
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-        log.info("[manual-short %d] Generating (feed=%s)...", index, args.feed)
+        if args.index > 0:
+            generate_one_short(base_dir, args.feed, args.topic, args.index, locale)
+        else:
+            count = max(1, args.count)
+            failures = 0
+            for _ in range(count):
+                index = _next_short_index(base_dir)
+                try:
+                    generate_one_short(base_dir, args.feed, args.topic, index, locale)
+                except Exception as exc:
+                    failures += 1
+                    log.error("[manual-short %d] Failed: %s", index, exc, exc_info=True)
+            if failures == count:
+                sys.exit(1)
 
-        headlines = get_breaking_headlines(args.feed, max_age_hours=48, limit=15)
-        if len(headlines) < 3:
-            log.error("[manual-short %d] Only %d fresh headlines for feed '%s' — aborting",
-                      index, len(headlines), args.feed)
-            sys.exit(1)
-
-        script = generate_shorts_script(headlines, focus=_FOCUS_BY_FEED[args.feed])
-        with open(work_dir / "script.json", "w", encoding="utf-8") as f:
-            json.dump(script, f, ensure_ascii=False, indent=2)
-
-        create_short(script, str(work_dir))
-        log.info("[manual-short %d] Done: %s", index, work_dir)
-
+    except Exception as exc:
+        log.error("[manual-short] Failed: %s", exc, exc_info=True)
+        sys.exit(1)
     finally:
         SHORT_LOCK_FILE.unlink(missing_ok=True)
 

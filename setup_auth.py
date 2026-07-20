@@ -41,7 +41,7 @@ if __name__ == "__main__":
         if _check_token_scopes():
             print("Existing token found with correct scopes. Re-authenticating anyway to refresh...")
         else:
-            print("Existing token has insufficient scopes (missing thumbnail permission).")
+            print("Existing token is missing a required scope (thumbnail management or analytics).")
             print("Deleting stale token and starting fresh OAuth flow...")
         os.remove(YOUTUBE_TOKEN_FILE)
 

@@ -3,11 +3,15 @@
 *.pickle
 client_secrets.json
 api/credentials.json
+app.db
 
 # ── Pipeline output (large files) ─────────────────────────────
 output/
 logs/
 pipeline.lock
+short_generate.lock
+engagement_state.json
+shorts_topic_history.json
 
 # ── Python ────────────────────────────────────────────────────
 __pycache__/

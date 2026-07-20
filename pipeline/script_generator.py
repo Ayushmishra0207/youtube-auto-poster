@@ -1,5 +1,7 @@
 """
-Generate a full Hindi YouTube video script using Claude.
+Generate a full Hindi YouTube video script using free LLM providers
+(Gemini, then free OpenRouter models). Anthropic/Claude is not used by
+choice — _generate_with_claude is kept defined but is never called.
 
 Output schema
 ─────────────
@@ -21,9 +23,9 @@ Output schema
   ]
 }
 
-Prompt caching: the system prompt is marked cache_control=ephemeral so it is
-cached after the first call. Subsequent calls in the same session skip re-encoding
-~600 tokens, cutting Claude API costs by ~80 %.
+Note: _generate_with_claude below still marks its system prompt with
+cache_control=ephemeral (an Anthropic-only feature) — harmless since that
+function is never called in the current free-providers-only chain.
 """
 import json
 import re
@@ -34,6 +36,7 @@ import requests
 from json_repair import repair_json
 
 from config import ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_FALLBACK_MODELS
+from pipeline.locales import Locale, get_locale
 from pipeline.logger import log
 from pipeline.retry import with_retry
 
@@ -42,78 +45,86 @@ _gemini_client = None
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# ── System prompt (cached) ────────────────────────────────────────────────────
-_SYSTEM_PROMPT = """\
-You are a top-tier Hindi YouTube content creator for @bitnomad1 — a channel targeting 1000 subscribers and 4000 watch hours. The current year is 2026. Always write content relevant to 2025-2026. Never reference events as "upcoming" if they already happened. Your videos must be emotionally engaging, informative, and shareable like viral news content.
+
+def _tag_examples(locale: Locale) -> str:
+    tags = locale.base_tags or [locale.language_name.lower() + " news"]
+    return '", "'.join(tags[:2])
+
+
+# ── System prompt (built per-locale; cached per-locale text by the caller) ───
+def _build_system_prompt(locale: Locale) -> str:
+    lang = locale.language_name
+    return f"""\
+You are a top-tier {lang} YouTube content creator for @bitnomad1 — a channel targeting 1000 subscribers and 4000 watch hours. The current year is 2026. Always write content relevant to 2025-2026. Never reference events as "upcoming" if they already happened. Your videos must be emotionally engaging, informative, and shareable like viral news content.
 
 Your output must be a single valid JSON object — no markdown, no extra text.
 
 JSON schema:
-{
-  "title":           "<Hindi title, max 100 chars, SEO-optimised, uses power words>",
+{{
+  "title":           "<{lang} title, max 100 chars, SEO-optimised, uses power words>",
   "title_english":   "<English translation>",
-  "description":     "<Hindi YouTube description, ~200 words, include hashtags, starts with hook>",
+  "description":     "<{lang} YouTube description, ~200 words, include hashtags, starts with hook>",
   "tags":            ["<tag1>", "<tag2>", ...],
-  "thumbnail_text":  "<5-6 shocking/urgent Hindi words for thumbnail, makes viewer MUST click>",
+  "thumbnail_text":  "<5-6 shocking/urgent {lang} words for thumbnail, makes viewer MUST click>",
   "sections": [
-    {
+    {{
       "id":             1,
-      "heading":        "<section heading in Hindi — short, punchy>",
-      "narration":      "<natural conversational Hindi narration — see rules below>",
+      "heading":        "<section heading in {lang} — short, punchy>",
+      "narration":      "<natural conversational {lang} narration — see rules below>",
       "key_points":     ["<point 1>", "<point 2>", "<point 3>"],
       "image_searches": ["<English visual query 1>", "<English visual query 2>", "<English visual query 3>", "<English visual query 4>", "<English visual query 5>"]
-    }
+    }}
   ]
-}
+}}
 
 TITLE RULES (SEO):
 - The single most important search keyword (the topic's name/subject) MUST appear within the first 40 characters — mobile search results and the suggested-video feed truncate titles there.
-- Combine the keyword with one power word (शॉकिंग, खुलासा, सच्चाई, वजह) and, where natural, a number or specific fact.
+- Combine the keyword with one power word in {lang} (equivalent to "shocking", "revealed", "truth", "why") and, where natural, a number or specific fact.
 - Max 100 chars total. Do not use ALL CAPS or excessive punctuation (!!!, ???) — YouTube's spam filters and viewer trust both suffer.
 
 DESCRIPTION RULES (SEO):
 - Line 1: a hook line that repeats the primary keyword — this is what shows in search-result snippets and the suggested-video description preview, so it must stand alone and make sense out of context.
 - Then 2-3 short paragraphs summarising the story, repeating the keyword and 2-3 close variants naturally (never keyword-stuff — write for a human first).
-- Then a one-line subscribe CTA.
+- Then a one-line subscribe CTA in {lang}.
 - End with a clean block of 5-8 hashtags, most important first (YouTube shows the first 3 hashtags above the video title).
 
 TAG RULES (SEO):
-- Provide 20-25 tags, ordered broad → specific (YouTube weights earlier tags more heavily). Start with 3-4 broad category tags (e.g. "hindi news", "india news"), then narrow to the specific topic and named entities.
+- Provide 20-25 tags, ordered broad → specific (YouTube weights earlier tags more heavily). Start with 3-4 broad category tags (e.g. "{_tag_examples(locale)}"), then narrow to the specific topic and named entities.
 - Never include two near-duplicate variants of the same phrase (e.g. do not include both "corruption india" and "india corruption") — pick the stronger one.
-- Mix Hindi and English tags; include at least a few trending/generic ones.
+- Mix {lang} and English tags; include at least a few trending/generic ones.
 
 NARRATION RULES (critical for natural human-like voice):
 - Write SHORT sentences. Maximum 12-15 words per sentence. News anchors speak in short bursts.
-- Use conversational Hindi, not formal/bookish. Like you're talking to a friend.
+- Use conversational {lang}, not formal/bookish. Like you're talking to a friend.
 - Include emotional hooks: shock, surprise, curiosity, urgency.
 - Add natural pauses by ending sentences with periods. Never write a wall of text.
-- Use rhetorical questions to engage: "क्या आप जानते हैं?", "सोचिए ज़रा!", "क्या होगा अगर?"
+- Use rhetorical questions to engage the viewer, in natural {lang} phrasing (equivalent to English "Did you know?", "Just imagine!", "What if?").
 - Include real numbers, statistics, and specific facts to build credibility.
-- Natural fillers where appropriate: "देखिए", "दरअसल", "जानिए", "सुनिए"
+- Use natural filler words/expressions a native {lang} speaker would use casually (equivalent to English "look", "actually", "you know", "listen").
 - Every section narration = 70-90 seconds of speech when read aloud at moderate pace.
 
 SECTION STRUCTURE (5-7 sections total):
-- Section 1 = VIRAL HOOK: Start with the most shocking/surprising fact. Use "आज हम बात करेंगे..." style. Make viewer commit to watching.
+- Section 1 = VIRAL HOOK: Start with the most shocking/surprising fact, in an opening style equivalent to "Today we're going to talk about...". Make viewer commit to watching.
 - Section 2-5 = Main content with facts, stories, explanations. Each section reveals something new.
 - Second-to-last section = Biggest revelation or climax.
-- Last section = Strong CTA: "दोस्तों, अगर यह वीडियो आपको पसंद आई तो..." end with "चैनल को like और subscribe करें, घंटी दबाना न भूलें!"
+- Last section = Strong CTA in natural {lang}, ending with something like "{locale.like_share_cta}" (adapt naturally to fit the narration flow, don't just paste it verbatim if it reads awkwardly).
 
 IMAGE SEARCHES (5 per section):
 - Each query should show a DIFFERENT visual angle of the section topic.
-- Use specific, visual, photogenic English terms.
+- Use specific, visual, photogenic English terms (these are stock-photo search queries regardless of narration language).
 - Mix: wide establishing shots, close-ups, people reacting, dramatic scenes, data/charts.
-- Examples for a corruption story: ["India parliament building exterior", "Indian politician speech crowd", "money corruption briefcase India", "protest India street crowd", "newspaper India headline printing"]
+- Examples for a corruption story: ["parliament building exterior", "politician speech crowd", "money corruption briefcase", "protest street crowd", "newspaper headline printing"]
 
 THUMBNAIL TEXT RULES:
 - Must create real curiosity, but must not promise something the video doesn't actually deliver — misleading thumbnails hurt session watch time and invite complaints, which hurts the channel more than a lower CTR would.
 
 MONETIZATION FOCUS:
 - Content must maximize WATCH TIME — every section must end with a teaser for the next.
-- Use cliffhangers: "लेकिन असली बात तो आगे है..." / "अगले हिस्से में जो बात है वो आपको हैरान कर देगी..."
+- Use cliffhangers in natural {lang} (equivalent to English "But the real story is still ahead..." / "What comes next will shock you...").
 - Topics that work best: controversies, shocking reveals, behind-the-scenes, what-happened-next stories.
 
 Rules:
-- Script must be entirely in Hindi (Devanagari script).
+- Script must be entirely in {lang}.
 - CRITICAL: Output must be valid JSON. Do NOT include literal newline characters inside string values. Write each narration as a single continuous string with no line breaks.
 - Total narration ≈ 7–9 minutes of speech for better watch time.\
 """
@@ -165,27 +176,23 @@ def _normalize_image_searches(script: dict) -> dict:
     return script
 
 
-_BASE_TAGS_LONGFORM = ["bitnomad1", "hindi news", "trending news india"]
-_BASE_TAGS_SHORTS = ["bitnomad1", "hindi news", "shorts"]
-_DEFAULT_HASHTAGS_LONGFORM = ["#Hindi", "#News", "#Trending", "#India"]
-_DEFAULT_HASHTAGS_SHORTS = ["#Shorts", "#News", "#Breaking"]
-
 _MAX_TAG_CHARS = 500       # YouTube's total tag-list character limit
 _MAX_TAGS_LONGFORM = 25
 _MAX_TAGS_SHORTS = 15
 
 
-def _enrich_metadata(script: dict, is_short: bool = False) -> dict:
+def _enrich_metadata(script: dict, is_short: bool = False, locale: Locale | None = None) -> dict:
     """
     Deterministic safety net applied after LLM generation:
     - dedupe tags case-insensitively
-    - guarantee a fixed base tag set is present
+    - guarantee a fixed base tag set is present (locale-specific + "bitnomad1"/"shorts")
     - cap total tags so the joined length stays under YouTube's 500-char limit
-    - guarantee the description contains at least one hashtag
+    - guarantee the description contains at least one hashtag (locale-specific default set)
     """
-    base_tags = _BASE_TAGS_SHORTS if is_short else _BASE_TAGS_LONGFORM
+    locale = locale or get_locale(None)
+    base_tags = ["bitnomad1"] + list(locale.base_tags) + (["shorts"] if is_short else [])
     max_tags = _MAX_TAGS_SHORTS if is_short else _MAX_TAGS_LONGFORM
-    default_hashtags = _DEFAULT_HASHTAGS_SHORTS if is_short else _DEFAULT_HASHTAGS_LONGFORM
+    default_hashtags = locale.default_hashtags
 
     raw_tags = [str(t).strip() for t in script.get("tags", []) if str(t).strip()]
 
@@ -250,7 +257,7 @@ def _parse_script_response(raw: str, topic: str, source: str, required_key: str 
 
 @with_retry(max_attempts=3, base_delay=5.0, exceptions=(anthropic.APIError, anthropic.APIConnectionError, ValueError))
 def _generate_with_claude(user_content: str, topic: str,
-                          system_prompt: str = _SYSTEM_PROMPT, required_key: str = "sections") -> dict:
+                          system_prompt: str, required_key: str = "sections") -> dict:
     msg = _client.messages.create(
         model="claude-opus-4-6",
         max_tokens=6000,
@@ -274,7 +281,7 @@ def _generate_with_claude(user_content: str, topic: str,
 
 @with_retry(max_attempts=2, base_delay=3.0, exceptions=(requests.exceptions.RequestException, ValueError))
 def _generate_with_openrouter(model: str, user_content: str, topic: str,
-                              system_prompt: str = _SYSTEM_PROMPT, required_key: str = "sections") -> dict:
+                              system_prompt: str, required_key: str = "sections") -> dict:
     resp = requests.post(
         _OPENROUTER_URL,
         headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
@@ -305,7 +312,7 @@ def _get_gemini_client():
 
 @with_retry(max_attempts=2, base_delay=3.0, exceptions=(Exception,))
 def _generate_with_gemini(user_content: str, topic: str,
-                          system_prompt: str = _SYSTEM_PROMPT, required_key: str = "sections") -> dict:
+                          system_prompt: str, required_key: str = "sections") -> dict:
     client = _get_gemini_client()
     response = client.models.generate_content(
         model="gemini-flash-lite-latest",
@@ -319,15 +326,24 @@ def _generate_with_gemini(user_content: str, topic: str,
 
 def _generate_via_chain(user_content: str, topic: str,
                         system_prompt: str, required_key: str) -> dict:
-    """Claude → free OpenRouter models → Gemini, first success wins."""
-    last_exc: Exception
-    try:
-        script = _generate_with_claude(user_content, topic, system_prompt, required_key)
-        log.info("Script ready via Claude: %s", script.get("title", "—"))
-        return script
-    except Exception as claude_exc:
-        log.warning("Claude failed for topic '%s': %s — falling back to free models", topic, claude_exc)
-        last_exc = claude_exc
+    """
+    Gemini → free OpenRouter models, first success wins. Claude/Anthropic is
+    intentionally NOT called — by request, this project only uses free
+    providers. _generate_with_claude is left defined below in case that
+    changes later, but nothing in this chain invokes it.
+    """
+    last_exc: Exception = ValueError(f"No script provider configured for topic '{topic}'")
+
+    if GEMINI_API_KEY:
+        try:
+            script = _generate_with_gemini(user_content, topic, system_prompt, required_key)
+            log.info("Script ready via Gemini: %s", script.get("title", "—"))
+            return script
+        except Exception as exc:
+            log.warning("Gemini failed for topic '%s': %s — falling back to OpenRouter", topic, exc)
+            last_exc = exc
+    else:
+        log.warning("GEMINI_API_KEY not set — skipping Gemini tier")
 
     if OPENROUTER_API_KEY:
         for model in OPENROUTER_FALLBACK_MODELS:
@@ -341,60 +357,53 @@ def _generate_via_chain(user_content: str, topic: str,
     else:
         log.warning("OPENROUTER_API_KEY not set — skipping OpenRouter fallback tier")
 
-    if GEMINI_API_KEY:
-        try:
-            script = _generate_with_gemini(user_content, topic, system_prompt, required_key)
-            log.info("Script ready via Gemini: %s", script.get("title", "—"))
-            return script
-        except Exception as exc:
-            log.warning("Gemini fallback failed for topic '%s': %s", topic, exc)
-            last_exc = exc
-    else:
-        log.warning("GEMINI_API_KEY not set — skipping Gemini fallback tier")
-
-    raise ValueError(f"All providers (Claude + OpenRouter + Gemini fallbacks) failed for topic '{topic}'") from last_exc
+    raise ValueError(f"All free providers (Gemini + OpenRouter) failed for topic '{topic}'") from last_exc
 
 
-def generate_script(topic: str, category_style: str = "") -> dict:
+def generate_script(topic: str, category_style: str = "", locale: Locale | None = None) -> dict:
     """
-    Generate a script via Claude, falling back to free OpenRouter models
-    (in order), then direct Gemini, if earlier providers are unavailable
-    (out of credits, rate-limited, etc.).
+    Generate a script via Gemini (free), falling back to free OpenRouter
+    models (in order) if Gemini is unavailable (rate-limited, etc.).
+    Anthropic/Claude is intentionally not used — free providers only.
+    locale drives output language/script/tags/CTAs; defaults to Hindi/India.
     """
-    log.info("Generating script for topic: %s", topic)
+    locale = locale or get_locale(None)
+    log.info("Generating script for topic: %s (locale=%s)", topic, locale.code)
 
     today = datetime.now().strftime("%d %B %Y")
     user_content = f'Today\'s date: {today}\n\nCreate a complete video script about: "{topic}"'
     if category_style:
         user_content += f"\n\nContent style: {category_style}"
 
-    script = _generate_via_chain(user_content, topic, _SYSTEM_PROMPT, required_key="sections")
-    return _enrich_metadata(script, is_short=False)
+    script = _generate_via_chain(user_content, topic, _build_system_prompt(locale), required_key="sections")
+    return _enrich_metadata(script, is_short=False, locale=locale)
 
 
 # ── YouTube Shorts scripts ────────────────────────────────────────────────────
 
-_SHORTS_SYSTEM_PROMPT = """\
-You are a Hindi breaking-news anchor writing scripts for 60-second YouTube Shorts for @bitnomad1. The current year is 2026.
+def _build_shorts_system_prompt(locale: Locale) -> str:
+    lang = locale.language_name
+    return f"""\
+You are a {lang} breaking-news anchor writing scripts for 60-second YouTube Shorts for @bitnomad1. The current year is 2026.
 
 You will be given REAL news headlines from the last 1-2 days. Your job: pack the MAXIMUM number of breaking news items into one fast-paced 60-second short, each with a very short factual brief. Use ONLY the given headlines as source material — never invent events.
 
 Your output must be a single valid JSON object — no markdown, no extra text.
 
 JSON schema:
-{
-  "title":        "<Hindi title, max 90 chars, urgent/breaking style, keyword in the first 5 words, MUST end with #Shorts>",
-  "description":  "<Hindi description, hook line + 3-5 relevant hashtags>",
-  "tags":         ["<12-15 tags, Hindi + English>"],
+{{
+  "title":        "<{lang} title, max 90 chars, urgent/breaking style, keyword in the first 5 words, MUST end with #Shorts>",
+  "description":  "<{lang} description, hook line + 3-5 relevant hashtags>",
+  "tags":         ["<12-15 tags, {lang} + English>"],
   "items": [
-    {
+    {{
       "id":           1,
-      "headline":     "<3-6 word punchy Hindi headline for on-screen text>",
-      "narration":    "<1-2 short Hindi sentences with concrete facts from the headline>",
+      "headline":     "<3-6 word punchy {lang} headline for on-screen text>",
+      "narration":    "<1-2 short {lang} sentences with concrete facts from the headline>",
       "image_search": "<specific English visual query for this news item>"
-    }
+    }}
   ]
-}
+}}
 
 TITLE RULES (SEO + retention):
 - The hook (most shocking/curious word or phrase) must land within the first 5 words — Shorts titles get cut off fast in the feed.
@@ -408,33 +417,119 @@ DESCRIPTION RULES (SEO):
 - Start with a real hook line (not filler), then 3-5 hashtags that are specific to today's actual headlines/topics (avoid generic-only tags like just "#news" alone).
 
 TAG RULES (SEO):
-- Provide 12-15 tags: a fixed broad set ("shorts", "hindi news", "breaking news") plus terms specific to today's headlines (names, places, topics).
+- Provide 12-15 tags: a fixed broad set ("shorts", "{_tag_examples(locale)}") plus terms specific to today's headlines (names, places, topics).
 
 RULES:
 - 5 to 7 items. Cover the most important and diverse stories from the given headlines.
 - Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
 - Narration: telegraphic news-flash style. Short punchy sentences. Real names, numbers, places from the headlines.
 - End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
-- Everything in Hindi (Devanagari) except proper nouns.
+- Everything in {lang} except proper nouns.
 - CRITICAL: valid JSON only, no literal newlines inside string values.\
 """
 
 
-def generate_shorts_script(headlines: list[str], focus: str = "India and world breaking news") -> dict:
+def generate_shorts_script(headlines: list[str], focus: str = "India and world breaking news",
+                          locale: Locale | None = None, avoid_titles: list[str] | None = None) -> dict:
     """
     Generate a 60-second Shorts script covering real headlines from the last 1-2 days.
-    Uses the same Claude → OpenRouter → Gemini fallback chain as generate_script.
+    Uses the same Gemini → OpenRouter free-provider chain as generate_script.
+    locale drives output language/script/tags; defaults to Hindi/India.
+    avoid_titles: titles of recently-generated Shorts (pipeline.topic_history) —
+    steers the LLM away from re-leading with the same dominant headline every time.
     """
-    log.info("Generating Shorts script (%d headlines, focus: %s)", len(headlines), focus)
+    locale = locale or get_locale(None)
+    log.info("Generating Shorts script (%d headlines, focus: %s, locale=%s)", len(headlines), focus, locale.code)
 
     today = datetime.now().strftime("%d %B %Y")
     headline_block = "\n".join(f"- {h}" for h in headlines)
+    avoid_block = (
+        f"\n\nAlready covered in recent Shorts — do NOT lead with these stories again, "
+        f"pick a different angle or headline instead:\n" + "\n".join(f"- {t}" for t in avoid_titles)
+        if avoid_titles else ""
+    )
     user_content = (
         f"Today's date: {today}\n\n"
         f"Focus: {focus}\n\n"
-        f"Real headlines from the last 1-2 days:\n{headline_block}\n\n"
+        f"Real headlines from the last 1-2 days:\n{headline_block}"
+        f"{avoid_block}\n\n"
         f"Create the Shorts script now."
     )
 
-    script = _generate_via_chain(user_content, f"shorts:{focus}", _SHORTS_SYSTEM_PROMPT, required_key="items")
-    return _enrich_metadata(script, is_short=True)
+    script = _generate_via_chain(
+        user_content, f"shorts:{focus}", _build_shorts_system_prompt(locale), required_key="items"
+    )
+    return _enrich_metadata(script, is_short=True, locale=locale)
+
+
+# ── YouTube Shorts — custom topic (not breaking news) ─────────────────────────
+
+def _build_shorts_topic_system_prompt(locale: Locale) -> str:
+    lang = locale.language_name
+    return f"""\
+You are a {lang} content creator writing scripts for 60-second YouTube Shorts for @bitnomad1. The current year is 2026.
+
+You will be given a TOPIC chosen by the creator (not breaking-news headlines). Your job: break this topic into the MAXIMUM number of interesting, fact-based points for one fast-paced 60-second short, each with a very short brief. Use your own knowledge of the topic — this is not a news bulletin, so don't claim anything happened "today" unless the topic itself is a recent event.
+
+Your output must be a single valid JSON object — no markdown, no extra text.
+
+JSON schema:
+{{
+  "title":        "<{lang} title, max 90 chars, curiosity-driven, keyword in the first 5 words, MUST end with #Shorts>",
+  "description":  "<{lang} description, hook line + 3-5 relevant hashtags>",
+  "tags":         ["<12-15 tags, {lang} + English>"],
+  "items": [
+    {{
+      "id":           1,
+      "headline":     "<3-6 word punchy {lang} headline for on-screen text>",
+      "narration":    "<1-2 short {lang} sentences with a concrete fact/angle about the topic>",
+      "image_search": "<specific English visual query for this point>"
+    }}
+  ]
+}}
+
+TITLE RULES (SEO + retention):
+- The hook (most shocking/curious word or phrase) must land within the first 5 words — Shorts titles get cut off fast in the feed.
+- Include one real keyword from the topic.
+- MUST end with "#Shorts".
+
+FIRST 3 SECONDS RULE (critical for Shorts retention):
+- The narration of item 1 MUST open with a pattern-interrupt hook — a shocking stat or a direct question — that is speakable in under 3 seconds. Do not open with a generic greeting.
+
+DESCRIPTION RULES (SEO):
+- Start with a real hook line (not filler), then 3-5 hashtags specific to the topic (avoid generic-only tags like just "#news" alone).
+
+TAG RULES (SEO):
+- Provide 12-15 tags: a broad set relevant to the topic's category plus specific terms from the topic itself.
+
+RULES:
+- 5 to 7 items. Cover the most interesting, diverse angles of the topic.
+- Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
+- Narration: telegraphic, punchy sentences. Real names, numbers, facts where possible.
+- End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
+- Everything in {lang} except proper nouns.
+- CRITICAL: valid JSON only, no literal newlines inside string values.\
+"""
+
+
+def generate_shorts_script_from_topic(topic: str, locale: Locale | None = None) -> dict:
+    """
+    Generate a 60-second Shorts script about an arbitrary creator-chosen
+    topic, instead of real breaking-news headlines. Uses the same
+    Gemini → OpenRouter free-provider chain as generate_script.
+    locale drives output language/script/tags; defaults to Hindi/India.
+    """
+    locale = locale or get_locale(None)
+    log.info("Generating Shorts script from topic: %s (locale=%s)", topic, locale.code)
+
+    today = datetime.now().strftime("%d %B %Y")
+    user_content = (
+        f"Today's date: {today}\n\n"
+        f"Topic: {topic}\n\n"
+        f"Create the Shorts script now."
+    )
+
+    script = _generate_via_chain(
+        user_content, f"shorts-topic:{topic}", _build_shorts_topic_system_prompt(locale), required_key="items"
+    )
+    return _enrich_metadata(script, is_short=True, locale=locale)

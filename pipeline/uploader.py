@@ -8,7 +8,11 @@ Subsequent runs use the saved token (auto-refreshed when it expires).
 
 Scope note: if you are upgrading from an older token that only has
 youtube.upload scope, delete youtube_token.pickle and re-run setup_auth.py
-so the broader youtube scope (needed for thumbnails) is granted.
+so the broader youtube scope (needed for thumbnails) is granted. The same
+applies after the yt-analytics.readonly scope was added (for monetization
+progress tracking), and again after youtube.force-ssl was added (for
+auto-posting engagement comments) — delete youtube_token.pickle and re-run
+setup_auth.py once to re-consent with the new scope.
 """
 import os
 import pickle
@@ -28,11 +32,16 @@ from config import (
     YT_MADE_FOR_KIDS,
 )
 from pipeline.logger import log
+from pipeline.text_utils import safe_truncate
 
-# youtube scope is a superset of youtube.upload and also allows thumbnail management
+# youtube scope is a superset of youtube.upload and also allows thumbnail management.
+# yt-analytics.readonly enables watch-hours/Shorts-views queries for monetization tracking.
+# youtube.force-ssl is required specifically for posting comments (commentThreads.insert).
 SCOPES = [
     "https://www.googleapis.com/auth/youtube",
     "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
 
@@ -76,9 +85,12 @@ def upload_video(
     tags: list,
     publish_at_utc: datetime,
     category_id: str = YT_CATEGORY_ID,
+    yt_language: str = YT_DEFAULT_LANGUAGE,
 ) -> str:
     """
     Upload video_path to YouTube and schedule it for publish_at_utc.
+    yt_language sets both defaultLanguage and defaultAudioLanguage — pass
+    locale.yt_language (pipeline/locales.py) for non-Hindi content.
 
     Returns the YouTube video ID.
     """
@@ -90,11 +102,12 @@ def upload_video(
 
     body = {
         "snippet": {
-            "title":           title[:100],
-            "description":     description[:5000],
-            "tags":            [str(t)[:500] for t in tags[:500]],
-            "categoryId":      category_id,
-            "defaultLanguage": YT_DEFAULT_LANGUAGE,
+            "title":                safe_truncate(title, 100),
+            "description":          description[:5000],
+            "tags":                 [str(t)[:500] for t in tags[:500]],
+            "categoryId":           category_id,
+            "defaultLanguage":      yt_language,
+            "defaultAudioLanguage": yt_language,
         },
         "status": {
             "privacyStatus":            "private",
@@ -120,6 +133,37 @@ def upload_video(
     vid_id = response["id"]
     log.info("Uploaded → https://youtube.com/watch?v=%s  (scheduled: %s)", vid_id, publish_str)
     return vid_id
+
+
+# ─── Post-upload engagement ───────────────────────────────────────────────────
+# YouTube's Community-post tab has no public API (it's Studio/app-only), but
+# top-level comments ARE a real, supported endpoint — this posts a channel-
+# owner CTA comment on a freshly uploaded video/Short to prime engagement.
+
+def post_engagement_comment(video_id: str, text: str) -> bool:
+    """
+    Post a top-level comment as the channel owner on video_id.
+    Returns True on success, False on failure (e.g. comments disabled).
+    """
+    try:
+        svc = _get_service()
+        svc.commentThreads().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "videoId": video_id,
+                    "topLevelComment": {"snippet": {"textOriginal": text}},
+                }
+            },
+        ).execute()
+        log.info("Posted engagement comment on video %s", video_id)
+        return True
+    except HttpError as e:
+        log.warning("Engagement comment failed for %s (comments may be disabled): %s", video_id, e)
+        return False
+    except Exception as e:
+        log.warning("Engagement comment failed for %s: %s", video_id, e)
+        return False
 
 
 def upload_thumbnail(video_id: str, thumbnail_path: str) -> bool:
