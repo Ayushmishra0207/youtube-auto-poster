@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import MobileHeader from "@/components/MobileHeader";
 import MobileNav from "@/components/MobileNav";
@@ -13,17 +13,35 @@ import LogViewer from "@/components/LogViewer";
 import ScheduleTimeline from "@/components/ScheduleTimeline";
 import SettingsPanel from "@/components/SettingsPanel";
 import UploadPanel from "@/components/UploadPanel";
+import LoginScreen from "@/components/LoginScreen";
+import { api, clearToken, getToken } from "@/lib/api";
 
 export type Tab = "overview" | "analytics" | "topics" | "videos" | "shorts" | "upload" | "logs" | "schedule" | "settings";
 
 export default function Dashboard() {
   const [tab, setTab]               = useState<Tab>("overview");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loggedIn, setLoggedIn]       = useState(false);
+
+  useEffect(() => {
+    if (!getToken()) {
+      setAuthChecked(true);
+      return;
+    }
+    api.me()
+      .then(() => setLoggedIn(true))
+      .catch(() => clearToken())
+      .finally(() => setAuthChecked(true));
+  }, []);
 
   const selectTab = (t: Tab) => {
     setTab(t);
     setDrawerOpen(false); // close drawer when nav item tapped
   };
+
+  if (!authChecked) return null;
+  if (!loggedIn) return <LoginScreen onLoggedIn={() => setLoggedIn(true)} />;
 
   return (
     <div className="flex h-screen overflow-hidden">

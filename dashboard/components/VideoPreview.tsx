@@ -6,6 +6,7 @@
  */
 import { useRef } from "react";
 import type { VideoMeta, VideoScript } from "@/lib/types";
+import { authedMediaUrl } from "@/lib/api";
 
 // Slide colors matching Python SLIDE_COLORS
 const SLIDE_COLORS = [
@@ -84,7 +85,7 @@ export default function VideoPreview({
         controls
         className="w-full rounded-xl"
         style={{ background: "#000", maxHeight: "400px" }}
-        src={`http://localhost:8000${video.video_url}`}
+        src={authedMediaUrl(video.video_url)}
       >
         Your browser does not support video.
       </video>

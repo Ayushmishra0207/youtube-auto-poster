@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { WS_URL } from "@/lib/api";
+import { wsLogsUrl } from "@/lib/api";
 import { Wifi, WifiOff, Trash2 } from "lucide-react";
 
 function colorLine(line: string) {
@@ -21,7 +21,7 @@ export default function LogViewer() {
 
   useEffect(() => {
     const connect = () => {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsLogsUrl());
       wsRef.current = ws;
 
       ws.onopen = () => setConnected(true);

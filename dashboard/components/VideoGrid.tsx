@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, authedMediaUrl, authHeaders } from "@/lib/api";
 import type { VideoMeta, VideoScript } from "@/lib/types";
 import { Play, Image as ImageIcon, FileJson, X, Upload, ExternalLink, CheckCircle } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -37,7 +37,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/upload-generated/${video.date}/${video.index}`, { method: "POST" });
+      const res  = await fetch(`${BASE}/api/upload-generated/${video.date}/${video.index}`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       onUploaded(video.index, data.video_id, data.url);
@@ -114,7 +114,7 @@ function VideoCard({
         {video.has_thumbnail ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={`${BASE}${video.thumbnail_url}`}
+            src={authedMediaUrl(video.thumbnail_url)}
             alt={video.title_english || video.title}
             className="w-full h-full object-cover"
           />

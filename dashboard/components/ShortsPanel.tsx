@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, authedMediaUrl, authHeaders } from "@/lib/api";
 import type { ShortMeta } from "@/lib/types";
 import { Play, X, Upload, ExternalLink, CheckCircle, Sparkles, Newspaper, Globe2, TrendingUp } from "lucide-react";
 
@@ -39,7 +39,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}`, { method: "POST" });
+      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       onUploaded(short.index, data.video_id, data.url);
@@ -116,7 +116,7 @@ function ShortCard({
         {short.has_thumbnail ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={`${BASE}${short.thumbnail_url}`}
+            src={authedMediaUrl(short.thumbnail_url)}
             alt={short.title}
             className="w-full h-full object-cover"
           />
@@ -324,7 +324,7 @@ export default function ShortsPanel() {
               <X size={16} />
             </button>
             <video
-              src={`${BASE}${playing.video_url}`}
+              src={authedMediaUrl(playing.video_url)}
               controls
               autoPlay
               className="rounded-xl"

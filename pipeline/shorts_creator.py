@@ -245,6 +245,16 @@ def create_short(script: dict, work_dir: str, category: str = "news",
             bg_image = fetch_image_pexels(
                 query, PEXELS_API_KEY, img_path, result_index=i % 3, orientation="portrait",
             )
+            if not bg_image:
+                # Pexels has no portrait match for niche/topical Hindi queries far
+                # more often than it does for the broader English search terms
+                # long-form videos use — Pollinations (free, unlimited AI-generated)
+                # is what keeps those reliable, so fall back to it here too instead
+                # of leaving the item with zero background media.
+                from pipeline.image_generator_pollinations import generate_image as pollinations_img
+                bg_image = pollinations_img(query, img_path, width=SHORTS_WIDTH, height=SHORTS_HEIGHT)
+                if bg_image:
+                    log.info("Short item %d [pollinations] %s", i + 1, query[:45])
 
         prepared.append({"item": item, "voice": voice_path, "video": bg_video, "image": bg_image})
 
