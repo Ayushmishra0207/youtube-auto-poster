@@ -50,7 +50,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import auth as auth_module
-from config import ENGAGEMENT_POLL_SECONDS, UPLOAD_SLOTS_IST
+from config import ENGAGEMENT_POLL_SECONDS, INSTAGRAM_POLL_SECONDS, UPLOAD_SLOTS_IST
 from db import init_db
 from pipeline.locales import DEFAULT_LOCALE, LOCALES, locales_by_continent
 from pipeline.logger import log
@@ -117,6 +117,7 @@ _PUBLIC_PATHS = {"/api/auth/login", "/docs", "/openapi.json", "/redoc"}
 async def _startup():
     init_db()
     asyncio.create_task(_engagement_loop())
+    asyncio.create_task(_instagram_loop())
 
 
 async def _engagement_loop():
@@ -131,6 +132,21 @@ async def _engagement_loop():
         except Exception as exc:
             log.error("Engagement pass failed: %s", exc, exc_info=True)
         await asyncio.sleep(ENGAGEMENT_POLL_SECONDS)
+
+
+async def _instagram_loop():
+    """Background poll loop: publish queued Instagram Reels once their
+    scheduled time arrives. See pipeline/instagram_queue.py for the actual
+    work — this loop just ticks it on a timer, same shape as _engagement_loop."""
+    from pipeline.instagram_queue import run_pending_posts
+    while True:
+        try:
+            result = await asyncio.to_thread(run_pending_posts)
+            if result["posted"] or result["failed"]:
+                log.info("Instagram pass: %s", result)
+        except Exception as exc:
+            log.error("Instagram pass failed: %s", exc, exc_info=True)
+        await asyncio.sleep(INSTAGRAM_POLL_SECONDS)
 
 
 def _session_token_from_request(request: Request) -> str:
@@ -1142,6 +1158,32 @@ async def generate_community_post_now():
     """Force an engagement pass right now instead of waiting for the next poll tick."""
     from pipeline.engagement import run_engagement_pass
     result = await asyncio.to_thread(run_engagement_pass)
+    return {"ok": True, **result}
+
+
+# ── Instagram Reels queue ────────────────────────────────────────────────────
+# See _instagram_loop() above and pipeline/instagram_queue.py. Each YouTube
+# Short is enqueued automatically (scheduler.py); this section exposes that
+# queue's status to the dashboard and allows a manual "run now" / retry.
+
+@app.get("/api/instagram/posts")
+async def get_instagram_posts():
+    from pipeline.instagram_queue import list_posts
+    return {"posts": list_posts()}
+
+@app.post("/api/instagram/posts/{post_id}/retry")
+async def retry_instagram_post(post_id: str):
+    from pipeline.instagram_queue import retry_post
+    ok = retry_post(post_id)
+    if not ok:
+        raise HTTPException(404, "Post not found or not in a failed state")
+    return {"ok": True}
+
+@app.post("/api/instagram/run")
+async def run_instagram_now():
+    """Force an Instagram publish pass right now instead of waiting for the next poll tick."""
+    from pipeline.instagram_queue import run_pending_posts
+    result = await asyncio.to_thread(run_pending_posts)
     return {"ok": True, **result}
 
 
