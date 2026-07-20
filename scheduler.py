@@ -474,6 +474,13 @@ def _run_shorts(base_dir: Path):
                 publish_at_utc=_ist_slot_to_utc(slot),
                 yt_language=locale.yt_language,
             )
+
+            try:
+                from pipeline.instagram_queue import enqueue as ig_enqueue
+                ig_caption = f"{script.get('title', '')}\n\n{script.get('description', '')}"[:2200]
+                ig_enqueue(video_path, ig_caption, publish_at_utc=_ist_slot_to_utc(slot))
+            except Exception as ig_exc:
+                log.warning("Instagram enqueue failed for Short %d: %s", i, ig_exc)
         except Exception as e:
             log.error("Short %d failed: %s", i, e, exc_info=True)
 
