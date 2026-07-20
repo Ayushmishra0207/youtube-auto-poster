@@ -360,6 +360,63 @@ def _generate_via_chain(user_content: str, topic: str,
     raise ValueError(f"All free providers (Gemini + OpenRouter) failed for topic '{topic}'") from last_exc
 
 
+_DEVANAGARI_RANGE = (0x0900, 0x097F)
+_LANGUAGE_COMPLIANCE_MIN_RATIO = 0.6
+
+
+def _script_compliance_ratio(text: str) -> float:
+    """
+    Fraction of alphabetic characters in `text` that fall in the Devanagari
+    Unicode block. Used to detect a free LLM model silently answering in
+    English despite the "must be entirely in Hindi" instruction — the free
+    providers this project uses (Gemini flash-lite, free OpenRouter models)
+    don't always follow it as reliably as Claude would.
+    """
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return 1.0
+    in_script = sum(1 for ch in letters if _DEVANAGARI_RANGE[0] <= ord(ch) <= _DEVANAGARI_RANGE[1])
+    return in_script / len(letters)
+
+
+def _narration_text(script: dict) -> str:
+    """Concatenate narration text from a long-form (`sections`) or Shorts (`items`) script."""
+    parts = [s.get("narration", "") for s in script.get("sections", [])]
+    parts += [it.get("narration", "") for it in script.get("items", [])]
+    return " ".join(parts)
+
+
+def _language_retry_content(user_content: str, locale: Locale) -> str:
+    return (
+        user_content
+        + f"\n\nIMPORTANT: Your previous response was not written entirely in {locale.language_name}. "
+        f"You MUST write the ENTIRE script — every narration, heading, and description — in {locale.language_name}."
+    )
+
+
+def _ensure_script_language(script: dict, locale: Locale, regenerate) -> dict:
+    """
+    If locale uses the Devanagari script, verify the generated narration is
+    actually in that script and regenerate once via `regenerate()` if not.
+    Falls back to the original script (with a logged warning) if the retry
+    also fails the check or raises — matches this project's fail-soft
+    convention of never blocking the whole pipeline over one video/short.
+    """
+    if locale.script != "devanagari":
+        return script
+    if _script_compliance_ratio(_narration_text(script)) >= _LANGUAGE_COMPLIANCE_MIN_RATIO:
+        return script
+    log.warning("Script failed %s language check — retrying generation once", locale.language_name)
+    try:
+        retried = regenerate()
+    except Exception as exc:
+        log.warning("Language-compliance retry failed (%s) — keeping original script", exc)
+        return script
+    if _script_compliance_ratio(_narration_text(retried)) < _LANGUAGE_COMPLIANCE_MIN_RATIO:
+        log.warning("Retry still failed %s language check — keeping it anyway (best of two attempts)", locale.language_name)
+    return retried
+
+
 def generate_script(topic: str, category_style: str = "", locale: Locale | None = None) -> dict:
     """
     Generate a script via Gemini (free), falling back to free OpenRouter
@@ -375,7 +432,14 @@ def generate_script(topic: str, category_style: str = "", locale: Locale | None 
     if category_style:
         user_content += f"\n\nContent style: {category_style}"
 
-    script = _generate_via_chain(user_content, topic, _build_system_prompt(locale), required_key="sections")
+    system_prompt = _build_system_prompt(locale)
+    script = _generate_via_chain(user_content, topic, system_prompt, required_key="sections")
+    script = _ensure_script_language(
+        script, locale,
+        regenerate=lambda: _generate_via_chain(
+            _language_retry_content(user_content, locale), topic, system_prompt, required_key="sections",
+        ),
+    )
     return _enrich_metadata(script, is_short=False, locale=locale)
 
 
@@ -456,8 +520,13 @@ def generate_shorts_script(headlines: list[str], focus: str = "India and world b
         f"Create the Shorts script now."
     )
 
-    script = _generate_via_chain(
-        user_content, f"shorts:{focus}", _build_shorts_system_prompt(locale), required_key="items"
+    system_prompt = _build_shorts_system_prompt(locale)
+    script = _generate_via_chain(user_content, f"shorts:{focus}", system_prompt, required_key="items")
+    script = _ensure_script_language(
+        script, locale,
+        regenerate=lambda: _generate_via_chain(
+            _language_retry_content(user_content, locale), f"shorts:{focus}", system_prompt, required_key="items",
+        ),
     )
     return _enrich_metadata(script, is_short=True, locale=locale)
 
@@ -529,7 +598,12 @@ def generate_shorts_script_from_topic(topic: str, locale: Locale | None = None) 
         f"Create the Shorts script now."
     )
 
-    script = _generate_via_chain(
-        user_content, f"shorts-topic:{topic}", _build_shorts_topic_system_prompt(locale), required_key="items"
+    system_prompt = _build_shorts_topic_system_prompt(locale)
+    script = _generate_via_chain(user_content, f"shorts-topic:{topic}", system_prompt, required_key="items")
+    script = _ensure_script_language(
+        script, locale,
+        regenerate=lambda: _generate_via_chain(
+            _language_retry_content(user_content, locale), f"shorts-topic:{topic}", system_prompt, required_key="items",
+        ),
     )
     return _enrich_metadata(script, is_short=True, locale=locale)
