@@ -71,5 +71,24 @@ export interface Settings {
   ANTHROPIC_API_KEY: string;
   PEXELS_API_KEY: string;
   KEEP_OUTPUT_DAYS: string;
+  INSTAGRAM_APP_ID: string;
+  INSTAGRAM_APP_SECRET: string;
+  INSTAGRAM_ACCESS_TOKEN: string;
+  INSTAGRAM_PAGE_ID: string;
+  INSTAGRAM_BUSINESS_ACCOUNT_ID: string;
+  R2_ACCOUNT_ID: string;
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+  R2_BUCKET_NAME: string;
   upload_slots: string[];
+}
+
+export interface InstagramPost {
+  id: string;
+  video_path: string;
+  caption: string;
+  publish_at_utc: string;
+  status: "pending" | "posted" | "failed";
+  error: string | null;
+  instagram_media_id: string | null;
 }
