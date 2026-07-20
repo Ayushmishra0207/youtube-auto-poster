@@ -397,6 +397,34 @@ def get_locale(code: str | None) -> Locale:
     return LOCALES.get(code, LOCALES[DEFAULT_LOCALE])
 
 
+# Category → thumbnail-badge text override. Hindi-only for now since every
+# configured slot in topic_config.json uses the Hindi locale in practice —
+# any category not listed here (including all actual news categories) keeps
+# the locale's default `breaking_badge` ("बड़ी खबर" style), which is correct
+# for real news content. Falls back to breaking_badge for every other locale
+# too, since we have no translated labels for those yet.
+_CATEGORY_BADGE_HI: dict[str, str] = {
+    "famous_story":     "कहानी",
+    "historical_story": "कहानी",
+    "science_tech":      "जानिए",
+    "sports":            "स्पोर्ट्स अपडेट",
+    "entertainment":     "एंटरटेनमेंट",
+    "custom_topic":      "जानिए",
+}
+
+
+def category_badge_text(category: str, locale: Locale) -> str:
+    """
+    Thumbnail badge text for a given topic category, in the given locale.
+    Prevents stamping "breaking news" on non-news content (stories, science,
+    sports, entertainment), which was previously unconditional and misled
+    viewers about what the video actually delivers.
+    """
+    if locale.code == "hi" and category in _CATEGORY_BADGE_HI:
+        return _CATEGORY_BADGE_HI[category]
+    return locale.breaking_badge
+
+
 def locales_by_continent() -> dict[str, list[Locale]]:
     """Group locales by continent, for a UI picker."""
     grouped: dict[str, list[Locale]] = {}

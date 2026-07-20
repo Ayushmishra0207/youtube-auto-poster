@@ -150,7 +150,7 @@ def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale
     with open(work_dir / "script.json", "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
 
-    create_short(script, str(work_dir), locale=locale)
+    create_short(script, str(work_dir), category=("news" if not topic.strip() else "custom_topic"), locale=locale)
     log.info("[manual-short %d] Done: %s", index, work_dir)
     return work_dir
 

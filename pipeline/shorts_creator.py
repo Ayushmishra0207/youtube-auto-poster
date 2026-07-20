@@ -23,7 +23,7 @@ from config import (
     PEXELS_API_KEY,
 )
 from pipeline.image_fetcher import fetch_image_pexels, fetch_video_pexels
-from pipeline.locales import Locale, get_locale
+from pipeline.locales import Locale, category_badge_text, get_locale
 from pipeline.logger import log
 from pipeline.music_fetcher import get_music_for_category
 from pipeline.video_creator import (
@@ -96,7 +96,7 @@ def _item_frame(headline: str, bg_path: Optional[str], colors: tuple, locale: Lo
 
 
 def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
-                           locale: Locale) -> str:
+                           locale: Locale, category: str = "") -> str:
     """
     Render a punchy vertical (9:16) thumbnail composited from the Short's own
     fetched background images — same tabloid-news look (badge, bold headline
@@ -143,7 +143,7 @@ def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
 
     # "BREAKING" style badge, top-left
     f_badge = _load_font(locale.font_bold, 40)
-    badge_txt = _shape_text(locale.breaking_badge, locale)
+    badge_txt = _shape_text(category_badge_text(category, locale), locale)
     bw_ = f_badge.getbbox(badge_txt)[2]
     draw.rectangle([(24, 24), (24 + bw_ + 36, 90)], fill=RED)
     draw.text((42, 34), badge_txt, font=f_badge, fill=(255, 255, 255))
@@ -344,7 +344,7 @@ def create_short(script: dict, work_dir: str, category: str = "news",
     thumb_path = str(work / "thumbnail.jpg")
     thumb_images = [p["image"] for p in prepared if p.get("image")][:3]
     try:
-        create_short_thumbnail(script, thumb_path, thumb_images, locale)
+        create_short_thumbnail(script, thumb_path, thumb_images, locale, category=category)
     except Exception as e:
         log.warning("Short thumbnail composite failed, falling back to frame capture: %s", e)
         try:

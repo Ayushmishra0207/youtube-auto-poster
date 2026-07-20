@@ -320,7 +320,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         ]
         # Spread picks across sections for visual variety
         picks = flat_images[:: max(1, len(flat_images) // 3)][:3] if flat_images else []
-        create_thumbnail(script, thumbnail_path, image_paths=picks, locale=locale, category_color=category_color)
+        create_thumbnail(script, thumbnail_path, image_paths=picks, locale=locale, category_color=category_color, category=category)
 
         # 5. Video
         video_path = str(work_dir / "final.mp4")

@@ -23,7 +23,7 @@ from config import (
     BG_MUSIC_PATH, BG_MUSIC_VOLUME,
     SLIDE_COLORS, VIDEO_FPS, VIDEO_HEIGHT, VIDEO_WIDTH, VIDEO_BITRATE,
 )
-from pipeline.locales import Locale, get_locale
+from pipeline.locales import Locale, category_badge_text, get_locale
 from pipeline.logger import log
 from pipeline.music_fetcher import get_music_for_category
 
@@ -518,7 +518,8 @@ def _diagonal_stamp(canvas: Image.Image, text: str, font: ImageFont.FreeTypeFont
 def create_thumbnail(script: dict, output_path: str,
                      image_paths: Optional[list[str]] = None,
                      locale: Optional[Locale] = None,
-                     category_color: str = "") -> str:
+                     category_color: str = "",
+                     category: str = "") -> str:
     """
     Render a punchy, tabloid-news-style composite thumbnail (1280×720):
     2-3 of the video's own images side by side, a top badge banner, a
@@ -588,7 +589,7 @@ def create_thumbnail(script: dict, output_path: str,
 
     # ── Top banner: full-width badge strip with a topic-colored underline ────
     f_badge = _load_font(locale.font_bold, 34)
-    badge_txt = _shape_text(locale.breaking_badge, locale)
+    badge_txt = _shape_text(category_badge_text(category, locale), locale)
     bw = f_badge.getbbox(badge_txt)[2]
     draw.rectangle([(0, 0), (W, 6)], fill=accent)
     draw.rectangle([(28, 20), (28 + bw + 36, 78)], fill=RED)
