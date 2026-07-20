@@ -1,3 +1,5 @@
+import type { InstagramPost } from "./types";
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // Render free tier cold-starts in 30-60s — give it enough time
@@ -118,6 +120,9 @@ export const api = {
   shorts:          (date?: string)             => get(`/api/shorts${date ? `?date=${date}` : ""}`),
   generateShort:   (feed: "india" | "world" | "business") => post("/api/shorts/generate", { feed }),
   shortScript:     (date: string, index: number)  => get(`/api/shorts/${date}/${index}/script`),
+  instagramPosts:     ()               => get<{ posts: InstagramPost[] }>("/api/instagram/posts"),
+  retryInstagramPost: (id: string)     => post(`/api/instagram/posts/${id}/retry`),
+  runInstagramNow:    ()               => post<{ ok: boolean; posted: number; failed: number }>("/api/instagram/run"),
 };
 
 export interface TopicConfigSlot {
