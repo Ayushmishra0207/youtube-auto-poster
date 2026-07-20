@@ -38,7 +38,12 @@ def _exchange_long_lived_token(app_id: str, app_secret: str, short_token: str) -
         timeout=30,
     )
     resp.raise_for_status()
-    return resp.json()["access_token"]
+    data = resp.json()
+    if "access_token" not in data:
+        raise RuntimeError(
+            f"Meta API did not return an access_token. Response: {data}"
+        )
+    return data["access_token"]
 
 
 def _find_page_and_ig_account(long_token: str) -> tuple[str, str]:
@@ -51,6 +56,10 @@ def _find_page_and_ig_account(long_token: str) -> tuple[str, str]:
     pages = resp.json().get("data", [])
     if not pages:
         raise RuntimeError("No Facebook Pages found for this account/token.")
+    if "id" not in pages[0]:
+        raise RuntimeError(
+            f"First page entry missing 'id' field. Response: {pages[0]}"
+        )
     page_id = pages[0]["id"]
 
     resp = requests.get(
@@ -86,8 +95,14 @@ if __name__ == "__main__":
     print("(See INSTAGRAM_SETUP.md if you haven't completed the browser steps yet.)\n")
 
     app_id      = input("Meta App ID: ").strip()
+    if not app_id:
+        raise SystemExit("Error: Meta App ID cannot be empty.")
     app_secret  = input("Meta App Secret: ").strip()
+    if not app_secret:
+        raise SystemExit("Error: Meta App Secret cannot be empty.")
     short_token = input("Short-lived User Access Token (from Graph API Explorer): ").strip()
+    if not short_token:
+        raise SystemExit("Error: Short-lived User Access Token cannot be empty.")
 
     print("\nExchanging for a long-lived token...")
     long_token = _exchange_long_lived_token(app_id, app_secret, short_token)
