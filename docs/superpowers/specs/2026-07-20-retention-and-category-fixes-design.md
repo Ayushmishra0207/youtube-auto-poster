@@ -125,6 +125,43 @@ Files: [pipeline/shorts_creator.py](../../../pipeline/shorts_creator.py),
   `_SHORTS_PLAN` to 5 distinct feeds/focuses so no feed repeats within a
   single day.
 
+## F. New "movie explained" category (8th daily slot)
+
+Files: [config.py](../../../config.py) `UPLOAD_SLOTS_IST`,
+[topic_config.json](../../../topic_config.json).
+
+YouTube Studio's Trends tab shows this channel's audience heavily searching
+for "movie explained in Hindi" / dubbed-movie content. That search intent
+overlaps with the same audience segment behind the legacy pirated-movie
+uploads already flagged as a monetization risk (see Problem section) —
+actual dubbed/clip-heavy movie redistribution is copyright infringement and
+must not be built. A narration-only "movie explainer" format is the legal
+way to capture this demand:
+
+- Add an 8th daily upload slot (`"19:40"`, 10 minutes after the existing
+  last slot) to `UPLOAD_SLOTS_IST` in `config.py`. Total long-form videos
+  per day goes from 7 to 8.
+- Add a `movie_explained` category to `topic_config.json` (slot entry +
+  category block), reusing the existing `generate_script` pipeline exactly
+  like `famous_story`/`historical_story` do — category-specific instructions
+  flow entirely through `prompt_style`, no new Python code needed.
+- `prompt_style` must explicitly frame this as commentary/review, not a
+  retelling: discuss plot, themes, performances, and audience reception in
+  the narrator's own words; no verbatim extended dialogue or lyrics; treat
+  it like a film critic's video essay, not a scene-by-scene substitute for
+  watching the movie.
+- `yt_category_id: "1"` (Film & Animation — a more accurate YouTube
+  classification for movie-focused content than the existing `entertainment`
+  category's "24").
+- No new image-safety mechanism needed: `image_searches` already only query
+  Pexels stock photography (cinema halls, red carpets, audiences), which
+  cannot return actual copyrighted movie stills/posters regardless of
+  category.
+- Optionally add a `"movie_explained": "cinematic,dramatic"` entry to
+  `CATEGORY_MUSIC_TAGS` in `config.py` (falls back to
+  `DEFAULT_MUSIC_TAGS = "cinematic,background"` if omitted, which already
+  fits reasonably well).
+
 ## Out of scope (explicit follow-ups, not dropped silently)
 
 - Finishing `pipeline/engagement.py`/`pipeline/community_post.py`
