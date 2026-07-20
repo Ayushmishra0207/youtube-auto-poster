@@ -1087,6 +1087,15 @@ class SettingsPayload(BaseModel):
     TTS_RATE: Optional[str] = None
     TTS_PITCH: Optional[str] = None
     SHORTS_PER_DAY: Optional[str] = None
+    INSTAGRAM_APP_ID: Optional[str] = None
+    INSTAGRAM_APP_SECRET: Optional[str] = None
+    INSTAGRAM_ACCESS_TOKEN: Optional[str] = None
+    INSTAGRAM_PAGE_ID: Optional[str] = None
+    INSTAGRAM_BUSINESS_ACCOUNT_ID: Optional[str] = None
+    R2_ACCOUNT_ID: Optional[str] = None
+    R2_ACCESS_KEY_ID: Optional[str] = None
+    R2_SECRET_ACCESS_KEY: Optional[str] = None
+    R2_BUCKET_NAME: Optional[str] = None
 
 @app.get("/api/settings")
 async def get_settings():
@@ -1099,6 +1108,15 @@ async def get_settings():
         "TTS_RATE": env.get("TTS_RATE", "-5%"),
         "TTS_PITCH": env.get("TTS_PITCH", "-8Hz"),
         "SHORTS_PER_DAY": env.get("SHORTS_PER_DAY", "5"),
+        "INSTAGRAM_APP_ID": env.get("INSTAGRAM_APP_ID", ""),
+        "INSTAGRAM_APP_SECRET": "***" if env.get("INSTAGRAM_APP_SECRET") else "",
+        "INSTAGRAM_ACCESS_TOKEN": "***" if env.get("INSTAGRAM_ACCESS_TOKEN") else "",
+        "INSTAGRAM_PAGE_ID": env.get("INSTAGRAM_PAGE_ID", ""),
+        "INSTAGRAM_BUSINESS_ACCOUNT_ID": env.get("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""),
+        "R2_ACCOUNT_ID": env.get("R2_ACCOUNT_ID", ""),
+        "R2_ACCESS_KEY_ID": "***" if env.get("R2_ACCESS_KEY_ID") else "",
+        "R2_SECRET_ACCESS_KEY": "***" if env.get("R2_SECRET_ACCESS_KEY") else "",
+        "R2_BUCKET_NAME": env.get("R2_BUCKET_NAME", ""),
         "upload_slots": UPLOAD_SLOTS,
     }
 
