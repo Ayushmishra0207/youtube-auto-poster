@@ -58,8 +58,8 @@ def get_breaking_headlines(feed: str = "india", max_age_hours: int = 48, limit: 
                            locale: Locale | None = None) -> list[str]:
     """
     Return up to `limit` headline strings from the given feed
-    ("india" | "world" | "business" — "india" means home-country news for
-    the active locale), no older than max_age_hours.
+    ("india" | "world" | "business" | "entertainment" | "sports" — "india"
+    means home-country news for the active locale), no older than max_age_hours.
     Returns [] on failure — callers must handle the empty case.
     """
     locale = locale or get_locale(None)

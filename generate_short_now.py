@@ -159,7 +159,7 @@ def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--feed", choices=["india", "world", "business"], default="india")
+    parser.add_argument("--feed", choices=["india", "world", "business", "entertainment", "sports"], default="india")
     parser.add_argument("--topic", default="", help="Custom topic — overrides --feed when set")
     parser.add_argument("--index", type=int, default=0,
                         help="Regenerate this existing short_NN in place instead of creating a new one")

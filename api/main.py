@@ -908,7 +908,7 @@ async def serve_short_script(date: str, index: int):
     return json.loads(path.read_text(encoding="utf-8"))
 
 class GenerateShortPayload(BaseModel):
-    feed: str = "india"           # "india" | "world" | "business" — ignored if topic is set
+    feed: str = "india"           # "india" | "world" | "business" | "entertainment" | "sports" — ignored if topic is set
     topic: str = ""               # custom topic; overrides feed when non-empty
     locale: str = DEFAULT_LOCALE  # region/language target (pipeline/locales.py)
     count: int = 1                # how many Shorts to generate in this run (batch mode)
@@ -918,8 +918,8 @@ async def generate_short(payload: GenerateShortPayload):
     global _short_proc
 
     topic = payload.topic.strip()
-    if not topic and payload.feed not in ("india", "world", "business"):
-        raise HTTPException(400, "feed must be one of: india, world, business")
+    if not topic and payload.feed not in ("india", "world", "business", "entertainment", "sports"):
+        raise HTTPException(400, "feed must be one of: india, world, business, entertainment, sports")
     if payload.locale not in LOCALES:
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
     count = max(1, min(payload.count, 10))
@@ -956,8 +956,8 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
         return {"ok": False, "message": "A Short generation/regeneration is already in progress"}
 
     topic = payload.topic.strip()
-    if not topic and payload.feed not in ("india", "world", "business"):
-        raise HTTPException(400, "feed must be one of: india, world, business")
+    if not topic and payload.feed not in ("india", "world", "business", "entertainment", "sports"):
+        raise HTTPException(400, "feed must be one of: india, world, business, entertainment, sports")
     if payload.locale not in LOCALES:
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
 
