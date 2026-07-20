@@ -399,6 +399,7 @@ def run_pipeline():
                 description=v["description"],
                 tags=v["tags"],
                 publish_at_utc=publish_utc,
+                category_id=v.get("yt_category_id", "25"),
                 yt_language=v.get("yt_language", "hi"),
             )
             upload_thumbnail(vid_id, v["thumbnail_path"])
