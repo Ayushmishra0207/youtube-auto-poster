@@ -101,9 +101,9 @@ NARRATION RULES (critical for natural human-like voice):
 - Use rhetorical questions to engage the viewer, in natural {lang} phrasing (equivalent to English "Did you know?", "Just imagine!", "What if?").
 - Include real numbers, statistics, and specific facts to build credibility.
 - Use natural filler words/expressions a native {lang} speaker would use casually (equivalent to English "look", "actually", "you know", "listen").
-- Every section narration = 70-90 seconds of speech when read aloud at moderate pace.
+- Every section narration = 30-45 seconds of speech when read aloud at moderate pace.
 
-SECTION STRUCTURE (5-7 sections total):
+SECTION STRUCTURE (3-4 sections total):
 - Section 1 = VIRAL HOOK: Start with the most shocking/surprising fact, in an opening style equivalent to "Today we're going to talk about...". Make viewer commit to watching.
 - Section 2-5 = Main content with facts, stories, explanations. Each section reveals something new.
 - Second-to-last section = Biggest revelation or climax.
@@ -126,7 +126,7 @@ MONETIZATION FOCUS:
 Rules:
 - Script must be entirely in {lang}.
 - CRITICAL: Output must be valid JSON. Do NOT include literal newline characters inside string values. Write each narration as a single continuous string with no line breaks.
-- Total narration ≈ 7–9 minutes of speech for better watch time.\
+- Total narration ≈ 2–3 minutes of speech. Shorter videos get watched to completion far more often than long ones on a small channel, and completion rate is what earns Suggested/Browse distribution — don't pad length at the expense of finishing strong.\
 """
 
 

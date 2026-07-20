@@ -44,7 +44,7 @@
       "color": "#C084FC",
       "description": "Famous Hindi writers and their iconic stories — Premchand, Jaishankar Prasad and more",
       "search_query": "Premchand Hindi kahani famous story",
-      "prompt_style": "cinematic literary storytelling — narrate this famous Hindi story dramatically in engaging conversational Hindi. Include: the author's background (1-2 sentences), the full story retold with vivid scenes and dialogue, the deeper moral and why this story is immortal in Indian literature. Make listeners feel the emotions. Total narration 8-10 minutes.",
+      "prompt_style": "cinematic literary storytelling — narrate this famous Hindi story dramatically in engaging conversational Hindi. Include: the author's background (1 short sentence), the story's core scene and turning point retold with vivid emotion, and the deeper moral in one closing line. Keep the dramatic arc but tell it tight — total narration 2-3 minutes, matching the video's overall length target.",
       "yt_category_id": "27",
       "fallback_topics": [
         "Premchand ki kahani Idgah — Hamid aur chimta",
