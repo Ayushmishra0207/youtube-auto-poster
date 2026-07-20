@@ -7,7 +7,7 @@
     {"slot": "19:10", "category": "historical_story", "custom_topic": null},
     {"slot": "19:20", "category": "sports",           "custom_topic": null},
     {"slot": "19:30", "category": "entertainment",    "custom_topic": null},
-    {"slot": "19:40", "category": "movie_explained",   "custom_topic": null}
+    {"slot": "19:40", "category": "movie_explained",  "custom_topic": null}
   ],
   "categories": {
     "news_india": {
