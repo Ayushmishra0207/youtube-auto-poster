@@ -302,7 +302,7 @@ async def status():
         "today_video_count": video_count,
         "total_slots": len(UPLOAD_SLOTS),
         "next_scheduled_run": "14:30 IST",
-        "upload_window": "18:30 – 19:30 IST",
+        "upload_window": f"{UPLOAD_SLOTS[0]} – {UPLOAD_SLOTS[-1]} IST",
         "last_log": last_log[0] if last_log else "",
     }
 
