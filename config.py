@@ -150,3 +150,26 @@ SLIDE_COLORS = [
     ("#1B1B2F", "#2C3333"),
     ("#000428", "#004e92"),
 ]
+
+# ─── Instagram Reels automation ────────────────────────────────────────────────────
+# Cross-posts the same vertical MP4s already rendered for YouTube Shorts.
+# See INSTAGRAM_SETUP.md for the one-time manual Meta Developer app / Facebook
+# Page linking steps, then run setup_instagram_auth.py to fill these in.
+INSTAGRAM_APP_ID              = os.getenv("INSTAGRAM_APP_ID", "")
+INSTAGRAM_APP_SECRET          = os.getenv("INSTAGRAM_APP_SECRET", "")
+INSTAGRAM_ACCESS_TOKEN        = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+INSTAGRAM_PAGE_ID             = os.getenv("INSTAGRAM_PAGE_ID", "")
+INSTAGRAM_BUSINESS_ACCOUNT_ID = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "")
+
+# Cloudflare R2 — temporary public hosting for each Reel's video file, since
+# Instagram's Graph API requires a public URL (no direct file upload). Uses a
+# presigned URL (1h expiry), so the R2 bucket itself never needs to be public.
+R2_ACCOUNT_ID        = os.getenv("R2_ACCOUNT_ID", "")
+R2_ACCESS_KEY_ID     = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET_NAME       = os.getenv("R2_BUCKET_NAME", "")
+
+# How often the background poller (api/main.py::_instagram_loop) checks for
+# queued Reels whose scheduled time has arrived. Tighter than the 15-minute
+# engagement poll since Reel timing is user-visible.
+INSTAGRAM_POLL_SECONDS = int(os.getenv("INSTAGRAM_POLL_SECONDS", str(5 * 60)))
