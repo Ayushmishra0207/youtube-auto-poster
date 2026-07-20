@@ -425,9 +425,11 @@ def run_pipeline():
 
 # Each daily short gets its own news feed + focus
 _SHORTS_PLAN = [
-    {"feed": "india",    "focus": "India breaking news"},
-    {"feed": "world",    "focus": "World breaking news"},
-    {"feed": "business", "focus": "Business and economy breaking news"},
+    {"feed": "india",         "focus": "India breaking news"},
+    {"feed": "world",         "focus": "World breaking news"},
+    {"feed": "business",      "focus": "Business and economy breaking news"},
+    {"feed": "entertainment", "focus": "Entertainment and Bollywood breaking news"},
+    {"feed": "sports",        "focus": "Sports breaking news"},
 ]
 
 

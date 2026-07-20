@@ -33,6 +33,8 @@ _FOCUS_BY_FEED = {
     "india": "India breaking news",
     "world": "World breaking news",
     "business": "Business and economy breaking news",
+    "entertainment": "Entertainment and Bollywood breaking news",
+    "sports": "Sports breaking news",
 }
 
 SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"

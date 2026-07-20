@@ -22,6 +22,8 @@ _FEED_PATHS = {
     "india": "https://news.google.com/rss",
     "world": "https://news.google.com/rss/headlines/section/topic/WORLD",
     "business": "https://news.google.com/rss/headlines/section/topic/BUSINESS",
+    "entertainment": "https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT",
+    "sports": "https://news.google.com/rss/headlines/section/topic/SPORTS",
 }
 
 _TIMEOUT = 15
