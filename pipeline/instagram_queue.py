@@ -55,7 +55,7 @@ def list_posts() -> list:
 def retry_post(entry_id: str) -> bool:
     """Reset a failed entry back to pending so the next poll retries it."""
     state = _load_state()
-    for p in state["posts"]:
+    for p in state.get("posts", []):
         if p["id"] == entry_id and p["status"] == "failed":
             p["status"] = "pending"
             p["error"] = None
@@ -67,15 +67,37 @@ def retry_post(entry_id: str) -> bool:
 def run_pending_posts() -> dict:
     """One pass: publish any pending entry whose publish_at_utc has arrived.
     Never raises — a failed post is recorded on its own entry and skipped,
-    so it can't block the rest of the queue or the caller's loop."""
+    so it can't block the rest of the queue or the caller's loop.
+
+    No-ops (leaving all entries as "pending") if Instagram/R2 credentials
+    aren't configured, so this never breaks the pipeline for someone who
+    hasn't done the Meta setup yet."""
+    import config
+
+    state = _load_state()
+
+    if not (
+        config.INSTAGRAM_ACCESS_TOKEN
+        and config.INSTAGRAM_BUSINESS_ACCOUNT_ID
+        and config.R2_ACCOUNT_ID
+        and config.R2_ACCESS_KEY_ID
+        and config.R2_SECRET_ACCESS_KEY
+        and config.R2_BUCKET_NAME
+    ):
+        pending_count = sum(1 for p in state.get("posts", []) if p["status"] == "pending")
+        log.info(
+            "Instagram/R2 credentials not configured — skipping %d pending Reel(s)",
+            pending_count,
+        )
+        return {"posted": 0, "failed": 0}
+
     from pipeline.instagram_uploader import publish_reel  # lazy: avoids importing
                                                             # boto3/requests at module
                                                             # load if Instagram isn't configured
-    state = _load_state()
     now = datetime.now(timezone.utc)
     posted, failed = 0, 0
 
-    for p in state["posts"]:
+    for p in state.get("posts", []):
         if p["status"] != "pending":
             continue
         target = datetime.fromisoformat(p["publish_at_utc"])
