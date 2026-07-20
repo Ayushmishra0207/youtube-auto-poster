@@ -59,7 +59,7 @@ VIDEO_BITRATE = "4000k"
 # 7 slots: 18:30 → 19:30 IST (evening prime time — peak Hindi audience)
 UPLOAD_SLOTS_IST = [
     "18:30", "18:40", "18:50",
-    "19:00", "19:10", "19:20", "19:30",
+    "19:00", "19:10", "19:20", "19:30", "19:40",
 ]
 
 # Generate at 14:30 IST so all 7 videos are ready before 18:30 upload
@@ -115,6 +115,7 @@ CATEGORY_MUSIC_TAGS = {
     "motivational": "motivational,uplifting",
     "story":        "cinematic,emotional",
     "entertainment": "upbeat,energetic",
+    "movie_explained": "cinematic,dramatic",
     "news":         "news,corporate,tense",   # used by Shorts (breaking news)
 }
 DEFAULT_MUSIC_TAGS = "cinematic,background"   # fallback vibe for unrecognised categories

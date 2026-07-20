@@ -6,7 +6,8 @@
     {"slot": "19:00", "category": "science_tech",     "custom_topic": null},
     {"slot": "19:10", "category": "historical_story", "custom_topic": null},
     {"slot": "19:20", "category": "sports",           "custom_topic": null},
-    {"slot": "19:30", "category": "entertainment",    "custom_topic": null}
+    {"slot": "19:30", "category": "entertainment",    "custom_topic": null},
+    {"slot": "19:40", "category": "movie_explained",   "custom_topic": null}
   ],
   "categories": {
     "news_india": {
@@ -122,6 +123,21 @@
         "Bollywood celebrity news 2026",
         "Hindi film box office 2026",
         "New Bollywood song viral 2026"
+      ]
+    },
+    "movie_explained": {
+      "label": "Movie Explained",
+      "color": "#EF4444",
+      "description": "Narrator's own commentary/review of a current movie — plot, themes, performances, reception. Not a retelling or dubbed reproduction.",
+      "search_query": "new movie release 2026 explained hindi review",
+      "prompt_style": "movie-explainer commentary in Hindi, in the style of a film critic's video essay. Discuss the plot setup, key themes, character arcs, standout performances, and audience/critical reception of a real, current or recently released movie — entirely in your own words. This is spoken analysis and review, NOT a scene-by-scene retelling: do not reproduce extended dialogue or song lyrics verbatim, and do not present it as a substitute for watching the film. Give an honest take (what works, what doesn't) to build viewer trust.",
+      "yt_category_id": "1",
+      "fallback_topics": [
+        "2026 ki trending Bollywood movie ka explanation aur review",
+        "Hollywood ki naye release movie ka Hindi mein explanation",
+        "South Indian dubbed movie 2026 ka review aur explanation",
+        "OTT par trending movie ka explanation Hindi mein",
+        "Naye release movie ka honest review Hindi mein"
       ]
     },
     "health": {
