@@ -11,6 +11,7 @@ logs/
 pipeline.lock
 short_generate.lock
 engagement_state.json
+instagram_queue.json
 shorts_topic_history.json
 
 # ── Python ────────────────────────────────────────────────────
