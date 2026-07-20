@@ -14,7 +14,7 @@ Endpoints:
   GET  /api/topics                          Current topic list (override or auto)
   POST /api/topics                          Set topic overrides
   DELETE /api/topics                        Clear topic overrides
-  GET  /api/topic-config                    Get category config for all 7 slots
+  GET  /api/topic-config                    Get category config for all 8 slots
   PUT  /api/topic-config                    Save category config
   GET  /api/analytics                       YouTube channel + recent video stats
   GET  /api/monetization                    Real progress toward YPP eligibility (standard + Shorts paths)
@@ -50,7 +50,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 import auth as auth_module
-from config import ENGAGEMENT_POLL_SECONDS
+from config import ENGAGEMENT_POLL_SECONDS, UPLOAD_SLOTS_IST
 from db import init_db
 from pipeline.locales import DEFAULT_LOCALE, LOCALES, locales_by_continent
 from pipeline.logger import log
@@ -66,7 +66,7 @@ TOKEN_FILE       = BASE_DIR / "youtube_token.pickle"
 PYTHON           = sys.executable
 
 IST = timezone(timedelta(hours=5, minutes=30))
-UPLOAD_SLOTS = ["18:30", "18:40", "18:50", "19:00", "19:10", "19:20", "19:30"]
+UPLOAD_SLOTS = UPLOAD_SLOTS_IST
 
 _pipeline_proc: Optional[subprocess.Popen] = None
 _short_proc: Optional[subprocess.Popen] = None

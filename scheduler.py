@@ -2,12 +2,12 @@
 Daily pipeline scheduler.
 
 Timeline (every day):
-  14:30 IST  -> pipeline kicks off, generates 7 videos
-  ~17:30 IST -> all uploads done, scheduled for 18:30-19:30 IST
+  14:30 IST  -> pipeline kicks off, generates 8 videos
+  ~17:30 IST -> all uploads done, scheduled for 18:30-19:40 IST
   18:30 IST  -> Video 1 goes live   (prime-time Hindi audience)
   18:40 IST  -> Video 2 goes live
   ...
-  19:30 IST  -> Video 7 goes live
+  19:40 IST  -> Video 8 goes live
 
 Run as a background service:
   python scheduler.py
@@ -346,7 +346,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
 # ___ Main pipeline ____________________________________________________________
 
 def run_pipeline():
-    """Generate all 7 videos and schedule them for upload."""
+    """Generate all 8 videos and schedule them for upload."""
     if not _acquire_lock():
         return  # another pipeline is running — skip silently
 
@@ -406,7 +406,7 @@ def run_pipeline():
         except Exception as e:
             log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
 
-    # __ YouTube Shorts (3 per day: India / World / Business breaking news) ___
+    # __ YouTube Shorts (5 per day: India / World / Business / Entertainment / Sports breaking news) ___
     try:
         _run_shorts(base_dir)
     except Exception as e:
@@ -416,7 +416,7 @@ def run_pipeline():
     log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
     _cleanup_old_output()
 
-    log.info("Pipeline complete. Videos scheduled for 18:30–19:30 IST.")
+    log.info("Pipeline complete. Videos scheduled for 18:30–19:40 IST.")
     log.info("=" * 60)
     _release_lock()
 

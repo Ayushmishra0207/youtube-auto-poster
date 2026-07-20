@@ -410,6 +410,7 @@ _CATEGORY_BADGE_HI: dict[str, str] = {
     "sports":            "स्पोर्ट्स अपडेट",
     "entertainment":     "एंटरटेनमेंट",
     "custom_topic":      "जानिए",
+    "movie_explained":   "मूवी रिव्यू",
 }
 
 
