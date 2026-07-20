@@ -78,6 +78,7 @@ def _create_container(video_url: str, caption: str) -> str:
     return resp.json()["id"]
 
 
+@with_retry(max_attempts=3, base_delay=5, exceptions=(requests.exceptions.RequestException,))
 def _wait_until_ready(container_id: str) -> None:
     for _ in range(CONTAINER_POLL_MAX_ATTEMPTS):
         resp = requests.get(
