@@ -99,7 +99,6 @@ NARRATION RULES (critical for natural human-like voice):
 - Include emotional hooks: shock, surprise, curiosity, urgency.
 - Add natural pauses by ending sentences with periods. Never write a wall of text.
 - Use rhetorical questions to engage the viewer, in natural {lang} phrasing (equivalent to English "Did you know?", "Just imagine!", "What if?").
-- Include real numbers, statistics, and specific facts to build credibility.
 - Use natural filler words/expressions a native {lang} speaker would use casually (equivalent to English "look", "actually", "you know", "listen").
 - Every section narration = 30-45 seconds of speech when read aloud at moderate pace.
 
@@ -122,6 +121,12 @@ MONETIZATION FOCUS:
 - Content must maximize WATCH TIME — every section must end with a teaser for the next.
 - Use cliffhangers in natural {lang} (equivalent to English "But the real story is still ahead..." / "What comes next will shock you...").
 - Topics that work best: controversies, shocking reveals, behind-the-scenes, what-happened-next stories.
+
+ACCURACY (critical — this channel's credibility depends on it):
+- Do NOT invent specific numbers, statistics, dates, quotes, or casualty/death counts that were not given to you as part of the topic. A wrong specific number is far more damaging than a true general statement.
+- When you are not certain of an exact figure, describe it qualitatively instead of fabricating precision (e.g. "काफी बड़ी गिरावट" / "a sharp drop", not an invented exact percentage; "कई लोग" / "several people", not an invented exact count).
+- Named public figures, organizations, and events must be real and correctly identified — do not attribute a real quote/action to the wrong person, and do not invent a fictional scandal, statement, or event involving a real named person.
+- Emotional, dramatic language is fine and expected (per the rules above) — the drama should come from framing and delivery, not from fabricated specifics.
 
 Rules:
 - Script must be entirely in {lang}.
@@ -486,7 +491,7 @@ TAG RULES (SEO):
 RULES:
 - 5 to 7 items. Cover the most important and diverse stories from the given headlines.
 - Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
-- Narration: telegraphic news-flash style. Short punchy sentences. Real names, numbers, places from the headlines.
+- Narration: telegraphic news-flash style. Short punchy sentences. Real names, numbers, places from the headlines — never a number, name, or detail that isn't actually in the given headlines.
 - End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
 - Everything in {lang} except proper nouns.
 - CRITICAL: valid JSON only, no literal newlines inside string values.\
@@ -574,7 +579,7 @@ TAG RULES (SEO):
 RULES:
 - 5 to 7 items. Cover the most interesting, diverse angles of the topic.
 - Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
-- Narration: telegraphic, punchy sentences. Real names, numbers, facts where possible.
+- Narration: telegraphic, punchy sentences. Use real, well-known facts about the topic — do not invent specific numbers, statistics, dates, or quotes you aren't actually confident are true; describe uncertain specifics qualitatively instead of fabricating precision.
 - End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
 - Everything in {lang} except proper nouns.
 - CRITICAL: valid JSON only, no literal newlines inside string values.\
