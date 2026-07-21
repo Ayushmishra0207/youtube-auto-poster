@@ -735,7 +735,16 @@ async def upload_generated_video(date: str, index: int):
             title       = s.get("title", title)[:100]
             description = s.get("description", "")[:5000]
             tags        = [str(t)[:500] for t in s.get("tags", [])[:500]]
-            category_id = "25"
+            # Look up this video's real category (e.g. movie_explained -> Film
+            # & Animation) instead of hardcoding News & Politics for
+            # everything — this endpoint previously ignored the topic
+            # category entirely, which is why manually-uploaded videos kept
+            # landing in the wrong YouTube category regardless of topic.
+            category_key = s.get("_category", "")
+            category_id = (
+                _load_topic_config().get("categories", {}).get(category_key, {}).get("yt_category_id")
+                or "25"
+            )
         except Exception:
             pass
 

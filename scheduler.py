@@ -305,8 +305,11 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         )
 
         # 4. Persist script for the dashboard API (locale tag lets the
-        # engagement-comment/Community-post automation pick the right language)
+        # engagement-comment/Community-post automation pick the right language;
+        # category tag lets the dashboard's manual "Upload to YouTube" button
+        # look up the correct yt_category_id instead of hardcoding one)
         script["_locale"] = locale.code
+        script["_category"] = category
         import json as _json
         with open(work_dir / "script.json", "w", encoding="utf-8") as _f:
             _json.dump(script, _f, ensure_ascii=False, indent=2)
