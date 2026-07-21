@@ -13,6 +13,8 @@ fetch_all_section_images() returns list[list[str|None]] — one inner list per
 section, each containing paths to multiple images that video_creator cycles through.
 """
 import os
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import requests
@@ -100,6 +102,137 @@ def fetch_video_pexels(query: str, api_key: str, output_path: str, result_index:
         return _fetch_pexels_video(query, api_key, output_path, result_index, orientation)
     except Exception as exc:
         log.warning("Pexels video failed ('%s'): %s", query[:40], exc)
+        return None
+
+
+# ── Wikipedia (real photo of a named person/place/org) ────────────────────────
+# Used when a query names a specific real entity (a politician, celebrity,
+# athlete, landmark, ...) — Pexels/Pollinations can't return an actual photo
+# of a named individual (Pexels is generic stock, and Pollinations is
+# generative, so "asking" it for a real person either fails or, worse,
+# fabricates a fake likeness of a real identifiable public figure, which this
+# project should never do). Wikipedia's own page thumbnail is a real,
+# properly-licensed photo instead.
+WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+# Wikimedia's API blocks requests with no/generic User-Agent (returns 403) —
+# https://meta.wikimedia.org/wiki/User-Agent_policy requires an identifying one.
+_WIKI_HEADERS = {"User-Agent": "youtube-auto-poster/1.0 (https://github.com/bitnomad1; contact via repo)"}
+
+
+def _words_similar(a: str, b: str) -> bool:
+    """Exact match, or close enough to cover transliteration/spelling
+    variants (e.g. "Zelensky" vs the page's "Zelenskyy")."""
+    return a == b or SequenceMatcher(None, a, b).ratio() >= 0.82
+
+
+_TITLE_STOPWORDS = {"and", "the", "for", "with", "from", "of", "in", "on", "vs", "v"}
+
+
+def _title_matches_query(query: str, title: str) -> bool:
+    """
+    Reject a Wikipedia match that isn't actually a page about the named
+    entity we searched for. A word-overlap check alone isn't enough: e.g.
+    querying "Donald Trump Iran" can resolve to the real article "Donald
+    Trump and fascism", which shares 2 of 3 query words but is a thematic/
+    analytical page whose lead photo could be anything (a protest, a
+    cartoon, ...) — not a photo of the person. So beyond requiring most of
+    the query's words to appear in the title (fuzzy match, since
+    Hindi-to-English transliteration of a name varies, e.g. "Zelensky" vs
+    the page's "Zelenskyy"), also require the title introduce NO extra
+    significant word beyond the query — a real biography/place page's title
+    is just the name itself, while an analytical/thematic title adds its own
+    topic word ("fascism", "controversy", "protests", ...). Biased to reject
+    more often: a missed real photo just falls back to Pexels/Pollinations/
+    the template, which is a far smaller problem than attaching a wrong or
+    inflammatory image to a real named person.
+    """
+    query_words = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2]
+    title_words = [w for w in re.findall(r"[a-z0-9]+", title.lower())
+                   if len(w) > 2 and w not in _TITLE_STOPWORDS]
+    if not query_words or not title_words:
+        return False
+
+    unexplained = [tw for tw in title_words if not any(_words_similar(tw, qw) for qw in query_words)]
+    if unexplained:
+        return False
+
+    matched = sum(1 for qw in query_words if any(_words_similar(qw, tw) for tw in title_words))
+    return matched / len(query_words) >= 0.5
+
+
+def _resolve_wikipedia_title(query: str) -> str | None:
+    """
+    Two-tier lookup: opensearch (title/prefix matching — precise, but only
+    matches when `query` is close to the real title verbatim) first, then
+    list=search (full-text, fuzzier — needed because our extracted entity
+    string is a regex guess that often carries extra trailing words like
+    "... Ukraine" or a slightly different spelling, which opensearch's strict
+    prefix matching rejects outright). Either tier's result must still pass
+    _title_matches_query before being trusted.
+    """
+    search_resp = requests.get(
+        WIKIPEDIA_API,
+        params={"action": "opensearch", "search": query, "limit": 1,
+                "namespace": 0, "format": "json"},
+        headers=_WIKI_HEADERS,
+        timeout=TIMEOUT,
+    )
+    search_resp.raise_for_status()
+    data = search_resp.json()
+    titles = data[1] if len(data) > 1 else []
+    if titles and _title_matches_query(query, titles[0]):
+        return titles[0]
+
+    fulltext_resp = requests.get(
+        WIKIPEDIA_API,
+        params={"action": "query", "list": "search", "srsearch": query,
+                "format": "json", "srlimit": 1},
+        headers=_WIKI_HEADERS,
+        timeout=TIMEOUT,
+    )
+    fulltext_resp.raise_for_status()
+    results = fulltext_resp.json().get("query", {}).get("search", [])
+    if results and _title_matches_query(query, results[0]["title"]):
+        return results[0]["title"]
+
+    return None
+
+
+@with_retry(max_attempts=2, base_delay=2.0, exceptions=(requests.exceptions.RequestException,))
+def _fetch_wikipedia_image(query: str, output_path: str) -> str | None:
+    title = _resolve_wikipedia_title(query)
+    if not title:
+        log.info("No confident Wikipedia match for '%s' — skipping", query)
+        return None
+
+    img_resp = requests.get(
+        WIKIPEDIA_API,
+        params={"action": "query", "titles": title, "prop": "pageimages",
+                "format": "json", "pithumbsize": 1280},
+        headers=_WIKI_HEADERS,
+        timeout=TIMEOUT,
+    )
+    img_resp.raise_for_status()
+    pages = img_resp.json().get("query", {}).get("pages", {})
+    page = next(iter(pages.values()), {})
+    thumb_url = page.get("thumbnail", {}).get("source")
+    if not thumb_url:
+        return None
+
+    photo_resp = requests.get(thumb_url, headers=_WIKI_HEADERS, timeout=TIMEOUT)
+    photo_resp.raise_for_status()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "wb") as f:
+        f.write(photo_resp.content)
+    return output_path
+
+
+def fetch_wikipedia_image(query: str, output_path: str) -> str | None:
+    """Real photo for a named entity via its Wikipedia page thumbnail, or None."""
+    try:
+        return _fetch_wikipedia_image(query, output_path)
+    except Exception as exc:
+        log.warning("Wikipedia image failed ('%s'): %s", query[:40], exc)
         return None
 
 

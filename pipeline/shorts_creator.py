@@ -9,6 +9,7 @@ Script shape (from script_generator.generate_shorts_script):
   {title, description, tags, items: [{id, headline, narration, image_search}]}
 """
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -22,13 +23,13 @@ from config import (
     SLIDE_COLORS, VIDEO_FPS,
     PEXELS_API_KEY,
 )
-from pipeline.image_fetcher import fetch_image_pexels, fetch_video_pexels
+from pipeline.image_fetcher import fetch_image_pexels, fetch_video_pexels, fetch_wikipedia_image
 from pipeline.locales import Locale, category_badge_text, get_locale
 from pipeline.logger import log
 from pipeline.music_fetcher import get_music_for_category
 from pipeline.video_creator import (
-    _XFADE, _KB_OVERSCAN, _cover_crop, _gradient, _ken_burns_clip, _load_font,
-    _shape_text, _shaped_lines, _video_cover_clip, draw_engagement_row,
+    _XFADE, _KB_OVERSCAN, _cover_crop, _gradient, _ken_burns_clip,
+    _load_font, _shape_text, _shaped_lines, _video_cover_clip, draw_engagement_row,
 )
 from pipeline.voice_generator import text_to_speech
 
@@ -95,6 +96,86 @@ def _item_frame(headline: str, bg_path: Optional[str], colors: tuple, locale: Lo
     return np.array(bg)
 
 
+_PROPER_NOUN_RE = re.compile(r"\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b")
+
+
+def _extract_proper_noun(*texts: str) -> Optional[str]:
+    """
+    Best-effort named-entity guess: 2-4 consecutive Title-Case English words
+    (e.g. "Narendra Modi", "Volodymyr Zelensky") — image_search queries are
+    always in English (per script_generator's prompt), so this is a cheap way
+    to spot "this item is actually about a specific real person/place" without
+    a full NER model. False positives just fall through to Pexels/Pollinations
+    below (Wikipedia search either won't match or the caller ignores a bad
+    match), so this only needs to be a reasonable guess, not perfect.
+    """
+    for text in texts:
+        m = _PROPER_NOUN_RE.search(text or "")
+        if m:
+            return m.group(0)
+    return None
+
+
+def _radial_alpha(W: int, H: int, cx: int, cy: int, radius: int, max_alpha: int) -> Image.Image:
+    """Grayscale mask: max_alpha at (cx, cy), fading linearly to 0 at radius."""
+    yy, xx = np.mgrid[0:H, 0:W]
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    alpha = np.clip(max_alpha * (1 - dist / radius), 0, max_alpha).astype(np.uint8)
+    return Image.fromarray(alpha, mode="L")
+
+
+# Vivid, high-contrast gradient pairs + a punchy glow/shape color, dedicated
+# to the no-photo fallback — deliberately NOT config.SLIDE_COLORS, which is a
+# muted/cinematic palette tuned for long-form backdrops behind lots of text,
+# not for a thumbnail that has to stop a scrolling thumb on its own.
+_FALLBACK_PALETTE: list[tuple[tuple[str, str], tuple[int, int, int]]] = [
+    (("#FF0844", "#FFB199"), (255, 255, 255)),
+    (("#7F00FF", "#E100FF"), (255, 214, 0)),
+    (("#00C6FF", "#0072FF"), (255, 255, 255)),
+    (("#F857A6", "#FF5858"), (255, 214, 0)),
+    (("#FF8008", "#FFC837"), (255, 255, 255)),
+    (("#8E2DE2", "#4A00E0"), (255, 214, 0)),
+]
+
+
+def _attractive_fallback_bg(W: int, H: int, key: str) -> Image.Image:
+    """
+    Eye-catching background for a Short whose items had zero fetched photos —
+    rotates between three bold template styles, each in a vivid high-contrast
+    color pair, instead of one flat static gradient, so a photo-less short
+    still looks designed to grab attention rather than empty. `key` (the
+    short's title) picks the palette + template deterministically, so
+    regenerating the same short keeps its look, while different shorts get
+    visual variety.
+    """
+    idx = sum(ord(c) for c in key) if key else 0
+    (c1, c2), glow = _FALLBACK_PALETTE[idx % len(_FALLBACK_PALETTE)]
+    style = idx % 3
+
+    base = Image.fromarray(_gradient(c1, c2, W, H)).convert("RGB")
+
+    if style == 0:
+        # Bright glow burst in the upper third
+        alpha = _radial_alpha(W, H, W // 2, int(H * 0.30), int(W * 0.95), max_alpha=190)
+        base = Image.composite(Image.new("RGB", (W, H), glow), base, alpha)
+    elif style == 1:
+        # Bold contrasting diagonal banner slicing across the frame
+        rgba = base.convert("RGBA")
+        draw = ImageDraw.Draw(rgba, "RGBA")
+        y0, band = int(H * 0.40), int(H * 0.16)
+        draw.polygon(
+            [(0, y0 - band), (W, y0 - int(band * 1.8)), (W, y0 + int(band * 0.6)), (0, y0 + band)],
+            fill=(*glow, 235),
+        )
+        base = rgba.convert("RGB")
+    else:
+        # Large glow burst tucked in the bottom-right corner for depth
+        alpha = _radial_alpha(W, H, int(W * 0.82), int(H * 0.75), int(W * 1.0), max_alpha=200)
+        base = Image.composite(Image.new("RGB", (W, H), glow), base, alpha)
+
+    return base
+
+
 def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
                            locale: Locale, category: str = "") -> str:
     """
@@ -102,8 +183,9 @@ def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
     fetched background images — same tabloid-news look (badge, bold headline
     banner, topic-colored accent rule) as the long-form video thumbnail
     (pipeline.video_creator.create_thumbnail), adapted to portrait. Falls
-    back to a plain gradient card if no real still images were fetched for
-    this Short (e.g. every item used a Pexels video background instead).
+    back to one of a few bold designed templates (see _attractive_fallback_bg)
+    if no real still images were fetched for this Short (e.g. every item used
+    a Pexels video background instead, or no source had a portrait match).
     """
     W, H = SHORTS_WIDTH, SHORTS_HEIGHT
     images = [p for p in (image_paths or []) if p and os.path.exists(p)]
@@ -113,7 +195,8 @@ def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     if not images:
-        canvas = Image.fromarray(_gradient("#1a1a2e", "#16213e", W, H)).convert("RGB")
+        seed_key = (script.get("title") or "").strip() or str(script.get("items", [{}])[0].get("headline", ""))
+        canvas = _attractive_fallback_bg(W, H, seed_key)
     else:
         canvas = Image.new("RGB", (W, H), (10, 10, 14))
         if len(images) == 1:
@@ -234,14 +317,25 @@ def create_short(script: dict, work_dir: str, category: str = "news",
             continue
 
         query = item.get("image_search", "breaking news background")
+        img_path = str(work / "images" / f"item_{i:02d}.jpg")
 
-        video_path = str(work / "images" / f"item_{i:02d}.mp4")
-        bg_video = fetch_video_pexels(query, PEXELS_API_KEY, video_path,
-                                      result_index=i % 3, orientation="portrait")
+        # If this item is actually about a specific real person/place/org
+        # (a politician, celebrity, athlete, landmark, ...), use their real
+        # Wikipedia photo instead of a generic stock clip or an AI-generated
+        # stand-in — a real, correctly-identified photo is both more relevant
+        # and safer than generating a fake likeness of a real named individual.
+        entity = _extract_proper_noun(query, item.get("headline", ""))
+        bg_image = fetch_wikipedia_image(entity, img_path) if entity else None
+        if bg_image:
+            log.info("Short item %d [wikipedia] %s", i + 1, entity)
 
-        bg_image = None
-        if not bg_video:
-            img_path = str(work / "images" / f"item_{i:02d}.jpg")
+        bg_video = None
+        if not bg_image:
+            video_path = str(work / "images" / f"item_{i:02d}.mp4")
+            bg_video = fetch_video_pexels(query, PEXELS_API_KEY, video_path,
+                                          result_index=i % 3, orientation="portrait")
+
+        if not bg_video and not bg_image:
             bg_image = fetch_image_pexels(
                 query, PEXELS_API_KEY, img_path, result_index=i % 3, orientation="portrait",
             )
