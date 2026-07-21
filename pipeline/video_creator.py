@@ -49,14 +49,24 @@ def _resolve_music_path(category: str) -> Optional[str]:
 # external library. Do NOT add े/ै here — they already render correctly and
 # swapping them breaks them.
 _DEVANAGARI_CONSONANT = r"[क-हक़-य़]"
+# Leading (र्)? captures reph (a word/syllable-initial र् -- e.g. in
+# words like "arth") separately so it is excluded from the swap below: reph
+# is not a below-base conjunct like the "kr" in "cricket" (which the rest of
+# this pattern still correctly carries along with the matra) -- it stays put,
+# and only the matra moves, past the consonant it actually attaches to.
+# Without this, a reph + matra word rendered with the matra landing before
+# the reph instead of before the following consonant.
 _PREBASE_MATRA_RE = re.compile(
-    rf"((?:{_DEVANAGARI_CONSONANT}्)*{_DEVANAGARI_CONSONANT})(ि)"
+    rf"(र्)?((?:{_DEVANAGARI_CONSONANT}्)*{_DEVANAGARI_CONSONANT})(ि)"
 )
 
 
 def _fix_devanagari(text: str) -> str:
     """Reorder Devanagari pre-base vowel signs for correct rendering without raqm."""
-    return _PREBASE_MATRA_RE.sub(lambda m: m.group(2) + m.group(1), text)
+    def _swap(m: re.Match) -> str:
+        reph, cluster, matra = m.group(1) or "", m.group(2), m.group(3)
+        return reph + matra + cluster
+    return _PREBASE_MATRA_RE.sub(_swap, text)
 
 
 # ─── Multi-script text shaping/wrapping ───────────────────────────────────────
