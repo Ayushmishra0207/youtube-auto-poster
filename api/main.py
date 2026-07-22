@@ -35,6 +35,7 @@ import base64
 import json
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -96,15 +97,6 @@ _frontend_url = os.environ.get("FRONTEND_URL", "")
 if _frontend_url:
     _ALLOWED_ORIGINS.append(_frontend_url.rstrip("/"))
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # ── Auth ───────────────────────────────────────────────────────────────────────
 # Small trusted user base (created via create_user.py, no public signup).
 # Session token via "Authorization: Bearer <token>" header, or a "token"
@@ -149,11 +141,44 @@ async def _instagram_loop():
         await asyncio.sleep(INSTAGRAM_POLL_SECONDS)
 
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 def _session_token_from_request(request: Request) -> str:
     header = request.headers.get("Authorization", "")
     if header.startswith("Bearer "):
         return header[len("Bearer "):].strip()
     return request.query_params.get("token", "")
+
+
+_VERCEL_ORIGIN_RE = re.compile(r"https://.*\.vercel\.app")
+
+
+def _cors_headers_for(request: Request) -> dict[str, str]:
+    """
+    Manually mirror CORSMiddleware's Access-Control-Allow-Origin logic onto
+    a response built directly here, instead of via `return await
+    call_next(...)`. CORSMiddleware only patches headers onto responses that
+    flow back through its own wrapped `send` — but `@app.middleware("http")`
+    (BaseHTTPMiddleware) sits between it and this function in a way that,
+    confirmed live, drops the header specifically on the early-return 401
+    path (an OPTIONS preflight to the deployed API got the header correctly;
+    the real GET request's 401 response, from the same origin, did not).
+    Since every unauthenticated request hits this exact path — it's the
+    first thing that happens before a token exists — the fix has to attach
+    the header here directly rather than rely on the outer middleware.
+    """
+    origin = request.headers.get("origin", "")
+    if origin and (origin in _ALLOWED_ORIGINS or _VERCEL_ORIGIN_RE.fullmatch(origin)):
+        return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+    return {}
 
 
 @app.middleware("http")
@@ -164,7 +189,8 @@ async def _require_auth(request: Request, call_next):
     token = _session_token_from_request(request)
     user = auth_module.get_user_for_session(token)
     if not user:
-        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"},
+                            headers=_cors_headers_for(request))
 
     request.state.user = user
     return await call_next(request)
