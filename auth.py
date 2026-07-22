@@ -33,6 +33,32 @@ def create_user(username: str, password: str) -> int:
         return cur.lastrowid
 
 
+def ensure_user(username: str, password: str) -> int:
+    """Create the user if missing, else reset its password to match. Idempotent.
+
+    Used to bootstrap the admin account from ADMIN_USERNAME/ADMIN_PASSWORD env
+    vars on startup, since the SQLite user store is gitignored and Render's
+    free-tier disk doesn't persist across deploys — create_user.py run
+    locally has no effect on the deployed backend.
+    """
+    salt = secrets.token_hex(16)
+    password_hash = _hash_password(password, salt)
+    with db_cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE username = ?", (username,))
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+                (password_hash, salt, row["id"]),
+            )
+            return row["id"]
+        cur.execute(
+            "INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
+            (username, password_hash, salt, datetime.now(timezone.utc).isoformat()),
+        )
+        return cur.lastrowid
+
+
 def verify_user(username: str, password: str) -> int | None:
     """Return the user_id if credentials are valid, else None."""
     with db_cursor() as cur:

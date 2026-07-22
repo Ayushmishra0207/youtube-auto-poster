@@ -108,6 +108,11 @@ _PUBLIC_PATHS = {"/api/auth/login", "/docs", "/openapi.json", "/redoc"}
 @app.on_event("startup")
 async def _startup():
     init_db()
+    admin_username = os.environ.get("ADMIN_USERNAME", "")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "")
+    if admin_username and admin_password:
+        auth_module.ensure_user(admin_username, admin_password)
+        log.info(f"Bootstrapped admin user '{admin_username}' from env vars")
     asyncio.create_task(_engagement_loop())
     asyncio.create_task(_instagram_loop())
 
