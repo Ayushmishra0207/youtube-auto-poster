@@ -966,6 +966,7 @@ async def serve_short_script(date: str, index: int):
 class GenerateShortPayload(BaseModel):
     feed: str = "india"           # "india" | "world" | "business" | "entertainment" | "sports" — ignored if topic is set
     topic: str = ""               # custom topic; overrides feed when non-empty
+    content_type: str = "news"    # tone/style for a custom topic (news, funny, story, devotional, ...); ignored if topic is empty
     locale: str = DEFAULT_LOCALE  # region/language target (pipeline/locales.py)
     count: int = 1                # how many Shorts to generate in this run (batch mode)
 
@@ -983,7 +984,8 @@ async def generate_short(payload: GenerateShortPayload):
     if _short_proc_running() or _short_lock_pid_alive():
         return {"ok": False, "message": "A Short is already being generated"}
 
-    args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--locale", payload.locale, "--count", str(count)]
+    args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--locale", payload.locale, "--count", str(count),
+            "--content-type", payload.content_type or "news"]
     if topic:
         args += ["--topic", topic]
     else:
@@ -1002,6 +1004,7 @@ async def generate_short(payload: GenerateShortPayload):
 class RegenerateShortPayload(BaseModel):
     feed: str = "india"
     topic: str = ""
+    content_type: str = "news"
     locale: str = DEFAULT_LOCALE
 
 @app.post("/api/shorts/{date}/{index}/regenerate")
@@ -1018,7 +1021,7 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
 
     args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--date", date, "--index", str(index),
-            "--locale", payload.locale]
+            "--locale", payload.locale, "--content-type", payload.content_type or "news"]
     args += ["--topic", topic] if topic else ["--feed", payload.feed]
 
     proc = subprocess.Popen(
