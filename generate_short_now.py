@@ -156,6 +156,7 @@ def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale
 
     script = build_short_script(feed=feed, topic=topic, locale=locale, content_type=content_type)
     script["_locale"] = locale.code
+    script["_content_type"] = content_type
     with open(work_dir / "script.json", "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
 

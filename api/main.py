@@ -963,6 +963,12 @@ async def serve_short_script(date: str, index: int):
         raise HTTPException(404, "Script not found")
     return json.loads(path.read_text(encoding="utf-8"))
 
+_SHORT_CONTENT_TYPES = (
+    "news", "funny", "story", "short_story", "motivational", "entertainment",
+    "bollywood", "history", "imagination", "devotional", "sports", "tech",
+    "comedy_skit", "horror_mystery", "books", "poetry",
+)
+
 class GenerateShortPayload(BaseModel):
     feed: str = "india"           # "india" | "world" | "business" | "entertainment" | "sports" — ignored if topic is set
     topic: str = ""               # custom topic; overrides feed when non-empty
@@ -977,6 +983,8 @@ async def generate_short(payload: GenerateShortPayload):
     topic = payload.topic.strip()
     if not topic and payload.feed not in ("india", "world", "business", "entertainment", "sports"):
         raise HTTPException(400, "feed must be one of: india, world, business, entertainment, sports")
+    if payload.content_type not in _SHORT_CONTENT_TYPES:
+        raise HTTPException(400, f"content_type must be one of: {', '.join(_SHORT_CONTENT_TYPES)}")
     if payload.locale not in LOCALES:
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
     count = max(1, min(payload.count, 10))
@@ -1017,6 +1025,8 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
     topic = payload.topic.strip()
     if not topic and payload.feed not in ("india", "world", "business", "entertainment", "sports"):
         raise HTTPException(400, "feed must be one of: india, world, business, entertainment, sports")
+    if payload.content_type not in _SHORT_CONTENT_TYPES:
+        raise HTTPException(400, f"content_type must be one of: {', '.join(_SHORT_CONTENT_TYPES)}")
     if payload.locale not in LOCALES:
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
 

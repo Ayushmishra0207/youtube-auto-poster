@@ -409,8 +409,24 @@ _CATEGORY_BADGE_HI: dict[str, str] = {
     "science_tech":      "जानिए",
     "sports":            "स्पोर्ट्स अपडेट",
     "entertainment":     "एंटरटेनमेंट",
-    "custom_topic":      "जानिए",
     "movie_explained":   "मूवी रिव्यू",
+    # Custom-topic content types (pipeline.script_generator._CONTENT_TYPE_TONE) —
+    # `generate_short_now.py` passes the raw content_type string as `category`,
+    # so every one of those 16 keys needs a badge here or it falls through to
+    # the generic "breaking news" badge, which misleads viewers on non-news Shorts.
+    "funny":             "मजेदार",
+    "story":             "कहानी",
+    "short_story":       "कहानी",
+    "motivational":      "प्रेरणादायक",
+    "bollywood":         "बॉलीवुड",
+    "history":           "इतिहास",
+    "imagination":       "कल्पना",
+    "devotional":        "आध्यात्मिक",
+    "tech":              "टेक",
+    "comedy_skit":       "मजेदार",
+    "horror_mystery":    "रहस्य",
+    "books":             "किताबें",
+    "poetry":            "कविता",
 }
 
 

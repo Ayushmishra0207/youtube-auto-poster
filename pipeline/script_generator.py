@@ -559,6 +559,11 @@ _CONTENT_TYPE_TONE: dict[str, str] = {
 
 def _build_shorts_topic_system_prompt(locale: Locale, content_type: str = "news") -> str:
     lang = locale.language_name
+    if content_type not in _CONTENT_TYPE_TONE:
+        log.warning(
+            "Unknown content_type '%s' — falling back to 'news' tone. Valid keys: %s",
+            content_type, ", ".join(_CONTENT_TYPE_TONE.keys()),
+        )
     tone = _CONTENT_TYPE_TONE.get(content_type, _CONTENT_TYPE_TONE["news"])
     return f"""\
 You are a {lang} content creator writing scripts for 60-second YouTube Shorts for @bitnomad1. The current year is 2026.
@@ -628,12 +633,12 @@ def generate_shorts_script_from_topic(topic: str, locale: Locale | None = None, 
     )
 
     system_prompt = _build_shorts_topic_system_prompt(locale, content_type)
-    cache_key = f"shorts-topic:{topic}:{content_type}"
-    script = _generate_via_chain(user_content, cache_key, system_prompt, required_key="items")
+    log_label = f"shorts-topic:{topic}:{content_type}"
+    script = _generate_via_chain(user_content, log_label, system_prompt, required_key="items")
     script = _ensure_script_language(
         script, locale,
         regenerate=lambda: _generate_via_chain(
-            _language_retry_content(user_content, locale), cache_key, system_prompt, required_key="items",
+            _language_retry_content(user_content, locale), log_label, system_prompt, required_key="items",
         ),
     )
     return _enrich_metadata(script, is_short=True, locale=locale)
