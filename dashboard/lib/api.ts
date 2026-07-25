@@ -118,7 +118,8 @@ export const api = {
   saveSettings:    (data: Record<string, string>) => post("/api/settings", data),
   script:          (date: string, index: number)  => get(`/api/videos/${date}/${index}/script`),
   shorts:          (date?: string)             => get(`/api/shorts${date ? `?date=${date}` : ""}`),
-  generateShort:   (feed: "india" | "world" | "business") => post("/api/shorts/generate", { feed }),
+  generateShort:   (feed: "india" | "world" | "business", topic: string = "", contentType: string = "news") =>
+    post("/api/shorts/generate", { feed, topic, content_type: contentType }),
   shortScript:     (date: string, index: number)  => get(`/api/shorts/${date}/${index}/script`),
   instagramPosts:     ()               => get<{ posts: InstagramPost[] }>("/api/instagram/posts"),
   retryInstagramPost: (id: string)     => post(`/api/instagram/posts/${id}/retry`),
