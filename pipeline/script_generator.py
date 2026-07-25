@@ -538,12 +538,34 @@ def generate_shorts_script(headlines: list[str], focus: str = "India and world b
 
 # ── YouTube Shorts — custom topic (not breaking news) ─────────────────────────
 
-def _build_shorts_topic_system_prompt(locale: Locale) -> str:
+_CONTENT_TYPE_TONE: dict[str, str] = {
+    "news": "Keep a factual, breaking-news tone — real, well-known facts framed like a news bulletin.",
+    "funny": "Make it genuinely funny — witty, meme-friendly, punchy comedic framing on every point.",
+    "story": "Frame the whole thing as a narrative with a hook, a rising middle, and a payoff at the end.",
+    "short_story": "Frame this as literary micro-fiction — build toward a twist or surprising final beat.",
+    "motivational": "Use an uplifting, second-person voice that pushes the viewer to feel inspired and take action.",
+    "entertainment": "Use a buzzy, casual, pop-culture tone, like gossiping about the latest trend.",
+    "bollywood": "Frame everything around Bollywood movies, actors, or industry gossip, in a fan-magazine tone.",
+    "history": "Tell it like a compelling historical story centered on a real event or figure.",
+    "imagination": "Use speculative 'what if' framing — explore hypothetical or imaginative angles on the topic.",
+    "devotional": "Use a reverent, spiritual, devotional tone appropriate for religious/spiritual content.",
+    "sports": "Use high-energy sports-commentary framing, like a hype reel.",
+    "tech": "Use a tech-explainer tone — gadgets, innovation, and 'how it works' framing.",
+    "comedy_skit": "Write it like a scripted comedy skit/scene building to a punchline, not a bulletin.",
+    "horror_mystery": "Use a suspenseful, eerie tone with an unresolved hook or cliffhanger.",
+    "books": "Frame it like a book recommendation/summary — enticing readers to pick it up.",
+    "poetry": "Give the narration a verse-like rhythm and vivid imagery, more poetic than bulletin-style.",
+}
+
+def _build_shorts_topic_system_prompt(locale: Locale, content_type: str = "news") -> str:
     lang = locale.language_name
+    tone = _CONTENT_TYPE_TONE.get(content_type, _CONTENT_TYPE_TONE["news"])
     return f"""\
 You are a {lang} content creator writing scripts for 60-second YouTube Shorts for @bitnomad1. The current year is 2026.
 
 You will be given a TOPIC chosen by the creator (not breaking-news headlines). Your job: break this topic into the MAXIMUM number of interesting, fact-based points for one fast-paced 60-second short, each with a very short brief. Use your own knowledge of the topic — this is not a news bulletin, so don't claim anything happened "today" unless the topic itself is a recent event.
+
+CONTENT TYPE / TONE: {tone}
 
 Your output must be a single valid JSON object — no markdown, no extra text.
 
@@ -586,15 +608,17 @@ RULES:
 """
 
 
-def generate_shorts_script_from_topic(topic: str, locale: Locale | None = None) -> dict:
+def generate_shorts_script_from_topic(topic: str, locale: Locale | None = None, content_type: str = "news") -> dict:
     """
     Generate a 60-second Shorts script about an arbitrary creator-chosen
     topic, instead of real breaking-news headlines. Uses the same
     Gemini → OpenRouter free-provider chain as generate_script.
     locale drives output language/script/tags; defaults to Hindi/India.
+    content_type selects the tone/style injected into the system prompt
+    (see _CONTENT_TYPE_TONE) — e.g. "funny", "devotional", "history".
     """
     locale = locale or get_locale(None)
-    log.info("Generating Shorts script from topic: %s (locale=%s)", topic, locale.code)
+    log.info("Generating Shorts script from topic: %s (locale=%s, content_type=%s)", topic, locale.code, content_type)
 
     today = datetime.now().strftime("%d %B %Y")
     user_content = (
@@ -603,12 +627,13 @@ def generate_shorts_script_from_topic(topic: str, locale: Locale | None = None) 
         f"Create the Shorts script now."
     )
 
-    system_prompt = _build_shorts_topic_system_prompt(locale)
-    script = _generate_via_chain(user_content, f"shorts-topic:{topic}", system_prompt, required_key="items")
+    system_prompt = _build_shorts_topic_system_prompt(locale, content_type)
+    cache_key = f"shorts-topic:{topic}:{content_type}"
+    script = _generate_via_chain(user_content, cache_key, system_prompt, required_key="items")
     script = _ensure_script_language(
         script, locale,
         regenerate=lambda: _generate_via_chain(
-            _language_retry_content(user_content, locale), f"shorts-topic:{topic}", system_prompt, required_key="items",
+            _language_retry_content(user_content, locale), cache_key, system_prompt, required_key="items",
         ),
     )
     return _enrich_metadata(script, is_short=True, locale=locale)
