@@ -1,11 +1,119 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, authedMediaUrl, authHeaders } from "@/lib/api";
 import type { ShortMeta } from "@/lib/types";
-import { Play, X, Upload, ExternalLink, CheckCircle, Sparkles, Newspaper, Globe2, TrendingUp } from "lucide-react";
+import { Play, X, Upload, ExternalLink, CheckCircle, Sparkles, Newspaper, Globe2, TrendingUp, ChevronDown, Check } from "lucide-react";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+interface ContentType {
+  label: string;
+  emoji: string;
+  color: string;
+}
+
+const CONTENT_TYPES: Record<string, ContentType> = {
+  news:           { label: "News",           emoji: "📰", color: "#4FC3F7" },
+  funny:          { label: "Funny",          emoji: "😂", color: "#facc15" },
+  story:          { label: "Story",          emoji: "📖", color: "#a78bfa" },
+  short_story:    { label: "Short Story",    emoji: "✍️", color: "#c084fc" },
+  motivational:   { label: "Motivational",   emoji: "🔥", color: "#fb923c" },
+  entertainment:  { label: "Entertainment",  emoji: "🎭", color: "#f472b6" },
+  bollywood:      { label: "Bollywood",      emoji: "🎬", color: "#e879f9" },
+  history:        { label: "History",        emoji: "🏛️", color: "#94a3b8" },
+  imagination:    { label: "Imagination",    emoji: "💭", color: "#818cf8" },
+  devotional:     { label: "Devotional",     emoji: "🕉️", color: "#fbbf24" },
+  sports:         { label: "Sports",         emoji: "🏆", color: "#4ade80" },
+  tech:           { label: "Tech",           emoji: "🔬", color: "#22d3ee" },
+  comedy_skit:    { label: "Comedy Skit",    emoji: "🎪", color: "#f59e0b" },
+  horror_mystery: { label: "Horror/Mystery", emoji: "👻", color: "#64748b" },
+  books:          { label: "Books",          emoji: "📚", color: "#60a5fa" },
+  poetry:         { label: "Poetry",         emoji: "🪶", color: "#f0abfc" },
+};
+
+function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (key: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 200 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const current = CONTENT_TYPES[value] ?? CONTENT_TYPES.news;
+
+  const handleOpen = () => {
+    if (btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 200) });
+    }
+    setOpen((o) => !o);
+  };
+
+  return (
+    <div>
+      <button
+        ref={btnRef}
+        onClick={handleOpen}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+        style={{
+          background: `${current.color}18`,
+          border: `1px solid ${current.color}40`,
+          color: current.color,
+        }}
+      >
+        <span>{current.emoji}</span>
+        <span>{current.label}</span>
+        <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && createPortal(
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 9998 }} onClick={() => setOpen(false)} />
+          <div
+            style={{
+              position: "fixed",
+              top: pos.top,
+              left: pos.left,
+              width: pos.width,
+              maxHeight: "50vh",
+              overflowY: "auto",
+              zIndex: 9999,
+              background: "#080c18",
+              border: "1px solid rgba(79,195,247,0.25)",
+              borderRadius: "12px",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.9)",
+            }}
+          >
+            {Object.entries(CONTENT_TYPES).map(([key, ct]) => (
+              <button
+                key={key}
+                onClick={() => { onSelect(key); setOpen(false); }}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  padding: "8px 12px",
+                  fontSize: "13px",
+                  textAlign: "left",
+                  background: key === value ? "rgba(255,255,255,0.05)" : "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: key === value ? ct.color : "#e2e8f0",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = key === value ? "rgba(255,255,255,0.05)" : "transparent")}
+              >
+                <span>{ct.emoji}</span>
+                <span style={{ flex: 1 }}>{ct.label}</span>
+                {key === value && <Check size={12} style={{ color: ct.color }} />}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body
+      )}
+    </div>
+  );
+}
 
 const FEEDS: { id: "india" | "world" | "business"; label: string; icon: React.ReactNode }[] = [
   { id: "india",    label: "India",    icon: <Newspaper size={13} /> },
@@ -173,14 +281,18 @@ function ShortCard({
 
 function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
   const [feed, setFeed]           = useState<"india" | "world" | "business">("india");
+  const [customTopic, setCustomTopic] = useState("");
+  const [contentType, setContentType] = useState("news");
   const [generating, setGenerating] = useState(false);
   const [msg, setMsg]             = useState<{ text: string; ok: boolean } | null>(null);
+
+  const usingCustomTopic = customTopic.trim().length > 0;
 
   const handle = async () => {
     setGenerating(true);
     setMsg(null);
     try {
-      const res: any = await api.generateShort(feed);
+      const res: any = await api.generateShort(feed, customTopic.trim(), contentType);
       if (res?.ok === false) {
         setMsg({ text: res.message ?? "Could not start generation", ok: false });
       } else {
@@ -203,6 +315,7 @@ function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
       <p className="text-xs" style={{ color: "var(--muted)" }}>
         Pulls real breaking headlines from the last 48 hours, writes a 60-second Hindi script at 1.5x voice speed, and renders a vertical video.
       </p>
+
       <div className="flex flex-wrap items-center gap-2">
         {FEEDS.map((f) => (
           <button
@@ -213,16 +326,37 @@ function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
               background: feed === f.id ? "rgba(79,195,247,0.15)" : "rgba(255,255,255,0.04)",
               border: `1px solid ${feed === f.id ? "rgba(79,195,247,0.4)" : "var(--border)"}`,
               color: feed === f.id ? "#4FC3F7" : "#94a3b8",
+              opacity: usingCustomTopic ? 0.4 : 1,
             }}
           >
             {f.icon}
             {f.label}
           </button>
         ))}
+      </div>
+
+      <div
+        className="rounded-xl p-3 space-y-2"
+        style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}
+      >
+        <p className="text-xs font-semibold" style={{ color: "#64748b" }}>OR — CUSTOM TOPIC</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={customTopic}
+            onChange={(e) => setCustomTopic(e.target.value)}
+            placeholder="Type any topic, e.g. 'IPL 2026 auction shockers'…"
+            className="flex-1 min-w-[200px] bg-transparent text-sm text-white outline-none border-b pb-1"
+            style={{ borderColor: usingCustomTopic ? "#4FC3F7" : "var(--border)" }}
+          />
+          <ContentTypeDropdown value={contentType} onSelect={setContentType} />
+        </div>
+      </div>
+
+      <div className="flex justify-end">
         <button
           onClick={handle}
           disabled={generating}
-          className="ml-auto flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50"
           style={{
             background: "linear-gradient(135deg, rgba(79,195,247,0.2) 0%, rgba(124,58,237,0.2) 100%)",
             border: "1px solid var(--border-strong)",
