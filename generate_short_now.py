@@ -6,6 +6,7 @@ own subprocess via api/main.py).
 Usage:
   python generate_short_now.py --feed india
   python generate_short_now.py --topic "IPL 2026 auction shockers"
+  python generate_short_now.py --topic "IPL 2026 auction shockers" --content-type funny
   python generate_short_now.py --feed world --index 3   # regenerate short_03 in place
   python generate_short_now.py --locale es --count 5    # 5 Spanish shorts in one run
 """
@@ -40,11 +41,16 @@ _FOCUS_BY_FEED = {
 SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
 
 
-def build_short_script(feed: str = "india", topic: str = "", locale: Locale | None = None) -> dict:
+def build_short_script(feed: str = "india", topic: str = "", locale: Locale | None = None,
+                        content_type: str = "news") -> dict:
     """
     Generate a Shorts script from either a custom topic (creator's own
     choice of subject) or a real breaking-news feed. Shared by the
     "generate new" and "regenerate existing" flows.
+
+    content_type only affects the custom-topic path — it selects the
+    tone/style of the generated script (see pipeline.script_generator's
+    _CONTENT_TYPE_TONE). Feed-based (breaking-news) generation ignores it.
 
     Filters out headlines that closely match a recently-generated Short's
     topic (pipeline.topic_history) so back-to-back generations don't keep
@@ -55,7 +61,7 @@ def build_short_script(feed: str = "india", topic: str = "", locale: Locale | No
     locale = locale or get_locale(None)
     topic = (topic or "").strip()
     if topic:
-        script = generate_shorts_script_from_topic(topic, locale=locale)
+        script = generate_shorts_script_from_topic(topic, locale=locale, content_type=content_type)
         record_topic(script.get("title", ""))
         return script
 
@@ -137,22 +143,24 @@ def _acquire_lock() -> bool:
     return _try_create_lock()
 
 
-def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale: Locale) -> Path:
+def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale: Locale,
+                        content_type: str = "news") -> Path:
     """Build, render, and save one Short into base_dir/short_NN. Returns work_dir."""
     work_dir = base_dir / f"short_{index:02d}"
     if work_dir.exists():
         shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    source = f"topic='{topic}'" if topic.strip() else f"feed={feed}"
+    source = f"topic='{topic}' (content_type={content_type})" if topic.strip() else f"feed={feed}"
     log.info("[manual-short %d] Generating (%s, locale=%s)...", index, source, locale.code)
 
-    script = build_short_script(feed=feed, topic=topic, locale=locale)
+    script = build_short_script(feed=feed, topic=topic, locale=locale, content_type=content_type)
     script["_locale"] = locale.code
     with open(work_dir / "script.json", "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
 
-    create_short(script, str(work_dir), category=("news" if not topic.strip() else "custom_topic"), locale=locale)
+    category = content_type if topic.strip() else "news"
+    create_short(script, str(work_dir), category=category, locale=locale)
     log.info("[manual-short %d] Done: %s", index, work_dir)
     return work_dir
 
@@ -161,6 +169,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--feed", choices=["india", "world", "business", "entertainment", "sports"], default="india")
     parser.add_argument("--topic", default="", help="Custom topic — overrides --feed when set")
+    parser.add_argument("--content-type", default="news", dest="content_type",
+                        help="Tone/style for a custom-topic script (e.g. news, funny, story, devotional); ignored for feed-based generation")
     parser.add_argument("--index", type=int, default=0,
                         help="Regenerate this existing short_NN in place instead of creating a new one")
     parser.add_argument("--date", default="", help="Output date folder (YYYY-MM-DD); defaults to today")
@@ -180,14 +190,14 @@ def main():
         base_dir.mkdir(parents=True, exist_ok=True)
 
         if args.index > 0:
-            generate_one_short(base_dir, args.feed, args.topic, args.index, locale)
+            generate_one_short(base_dir, args.feed, args.topic, args.index, locale, content_type=args.content_type)
         else:
             count = max(1, args.count)
             failures = 0
             for _ in range(count):
                 index = _next_short_index(base_dir)
                 try:
-                    generate_one_short(base_dir, args.feed, args.topic, index, locale)
+                    generate_one_short(base_dir, args.feed, args.topic, index, locale, content_type=args.content_type)
                 except Exception as exc:
                     failures += 1
                     log.error("[manual-short %d] Failed: %s", index, exc, exc_info=True)
