@@ -124,6 +124,14 @@ export const api = {
   instagramPosts:     ()               => get<{ posts: InstagramPost[] }>("/api/instagram/posts"),
   retryInstagramPost: (id: string)     => post(`/api/instagram/posts/${id}/retry`),
   runInstagramNow:    ()               => post<{ ok: boolean; posted: number; failed: number }>("/api/instagram/run"),
+  listAccounts:            ()                              => get<any>("/api/accounts"),
+  toggleAccount:           (id: string, enabled: boolean)   => post(`/api/accounts/${id}/toggle`, { enabled }),
+  getAccountTopicConfig:   (id: string)                     => get<any>(`/api/accounts/${id}/topic-config`),
+  saveAccountTopicConfig:  (id: string, cfg: unknown)       => post(`/api/accounts/${id}/topic-config`, cfg),
+  getAccountShortsConfig:  (id: string)                     => get<any>(`/api/accounts/${id}/shorts-config`),
+  saveAccountShortsConfig: (id: string, cfg: unknown)       => post(`/api/accounts/${id}/shorts-config`, cfg),
+  generateVideo: (accountId: string, category: string, customTopic: string, locale: string) =>
+    post("/api/videos/generate", { account_id: accountId, category, custom_topic: customTopic, locale }),
 };
 
 export interface TopicConfigSlot {
