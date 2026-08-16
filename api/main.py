@@ -4,6 +4,7 @@ FastAPI backend for the YouTube Auto-Poster Dashboard.
 Endpoints:
   GET  /api/status                          Pipeline running state + today's stats
   GET  /api/videos                          List today's generated videos
+  POST /api/videos/generate                 Start on-demand long-form generation (fire-and-forget subprocess)
   POST /api/videos/{date}/{n}/regenerate    Regenerate one video slot in place
   POST /api/shorts/{date}/{n}/regenerate    Regenerate one Short in place
   GET  /api/locales                         Country/continent targets, grouped by continent
@@ -72,15 +73,26 @@ IST = timezone(timedelta(hours=5, minutes=30))
 UPLOAD_SLOTS = UPLOAD_SLOTS_IST
 
 _pipeline_proc: Optional[subprocess.Popen] = None
-_short_proc: Optional[subprocess.Popen] = None
-SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
+# On-demand long-form generation (POST /api/videos/generate) — spawned as its
+# own subprocess and polled for completion, same as the Shorts equivalent.
+_generate_video_proc: Optional[subprocess.Popen] = None
+# Shorts generation subprocesses, one slot per account id.
+_short_procs: dict[str, subprocess.Popen] = {}
 
-# Per-item regenerate subprocesses, keyed by "video:{date}:{index}" / "short:{date}:{index}"
+
+def _short_lock_file(account_id: str = "default") -> Path:
+    """Per-account Shorts generation lock — a single global lock meant one
+    account's Short blocked every other account's."""
+    return BASE_DIR / f"short_generate_{account_id}.lock"
+
+# Per-item regenerate subprocesses, keyed by
+# "{kind}:{account_id}:{date}:{index}" — the account has to be part of the key
+# or regenerating video 3 for account A marks account B's video 3 as busy too.
 _regen_procs: dict[str, subprocess.Popen] = {}
 
 
-def _regen_key(kind: str, date: str, index: int) -> str:
-    return f"{kind}:{date}:{index}"
+def _regen_key(kind: str, date: str, index: int, account_id: str = "default") -> str:
+    return f"{kind}:{account_id}:{date}:{index}"
 
 
 def _regen_running(key: str) -> bool:
@@ -288,19 +300,24 @@ def _short_status(sdir: Path) -> str:
     if (sdir / "script.json").exists():    return "generating"
     return "pending"
 
-def _short_proc_running() -> bool:
-    global _short_proc
-    return _short_proc is not None and _short_proc.poll() is None
+def _short_proc_running(account_id: str = "default") -> bool:
+    proc = _short_procs.get(account_id)
+    return proc is not None and proc.poll() is None
 
-def _short_lock_pid_alive() -> bool:
-    if not SHORT_LOCK_FILE.exists():
+def _short_lock_pid_alive(account_id: str = "default") -> bool:
+    lock_file = _short_lock_file(account_id)
+    if not lock_file.exists():
         return False
     try:
-        pid = int(SHORT_LOCK_FILE.read_text().strip())
+        pid = int(lock_file.read_text().strip())
         r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True, timeout=10)
         return str(pid) in r.stdout
     except Exception:
         return False
+
+def _generate_video_running() -> bool:
+    global _generate_video_proc
+    return _generate_video_proc is not None and _generate_video_proc.poll() is None
 
 def _load_topic_config() -> dict:
     # Cloud: seed from env var on first boot if file doesn't exist
@@ -347,16 +364,30 @@ def _get_youtube_service(token_file: str | None = None):
     from googleapiclient.discovery import build
     return build("youtube", "v3", credentials=_get_youtube_credentials(token_file))
 
-def _get_analytics_service():
+def _get_analytics_service(token_file: str | None = None):
     from googleapiclient.discovery import build
-    return build("youtubeAnalytics", "v2", credentials=_get_youtube_credentials())
+    return build("youtubeAnalytics", "v2", credentials=_get_youtube_credentials(token_file))
+
+
+def _account_token_file(account_id: str) -> str | None:
+    """Resolve an account id to its Account.token_file, or None (= the default
+    account's token) when the id doesn't resolve. Used by every route that
+    talks to YouTube on behalf of the account currently selected in the
+    dashboard's account switcher."""
+    account = get_account(account_id)
+    return account.token_file if account else None
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
-async def status():
-    today_dir = OUTPUT_DIR / _today()
+async def status(account_id: str = "default"):
+    # Output moved under output/<account_id>/<date>/ in the multi-account
+    # restructure — reading OUTPUT_DIR/<date> directly counts a path that no
+    # longer exists, so today's video count was permanently 0.
+    account = get_account(account_id)
+    base_dir = account.output_dir if account else OUTPUT_DIR
+    today_dir = base_dir / _today()
     video_count = len(list(today_dir.glob("video_*"))) if today_dir.exists() else 0
     last_log = _tail_log(1)
     is_running = _pipeline_running() or _lock_pid_alive()
@@ -420,7 +451,7 @@ async def list_videos(date: Optional[str] = None, account_id: str = "default"):
                 "script_url": f"/api/videos/{target}/{i+1}/script?account_id={account_id}",
                 "youtube_id": yt_id,
                 "youtube_url": yt_url,
-                "is_regenerating": _regen_running(_regen_key("video", target, i + 1)),
+                "is_regenerating": _regen_running(_regen_key("video", target, i + 1, account_id)),
             })
     return {"date": target, "videos": videos}
 
@@ -431,7 +462,7 @@ class RegenerateVideoPayload(BaseModel):
 @app.post("/api/videos/{date}/{index}/regenerate")
 async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayload = RegenerateVideoPayload(), account_id: str = "default"):
     """Regenerate an existing video slot in place (new script/voice/images/render, no auto-upload)."""
-    key = _regen_key("video", date, index)
+    key = _regen_key("video", date, index, account_id)
     if _regen_running(key) or _pipeline_running() or _lock_pid_alive():
         return {"ok": False, "message": "A video generation/regeneration is already in progress"}
 
@@ -459,19 +490,51 @@ class GenerateVideoRequest(BaseModel):
 
 @app.post("/api/videos/generate")
 async def generate_video(req: GenerateVideoRequest):
-    """On-demand long-form generation for a given account + category (real generation + upload)."""
-    from scheduler import generate_video_now
+    """
+    On-demand long-form generation for a given account + category (real
+    generation + upload).
 
-    def _do_generate():
-        return generate_video_now(req.account_id, req.category, req.custom_topic, req.locale)
+    Fire-and-forget, same shape as /api/shorts/generate: script + TTS +
+    images + MoviePy render + a resumable YouTube upload takes minutes, so
+    running it inside the request handler guaranteed a client-side timeout
+    while the backend went on to publish a video the user had just been told
+    had failed. The work runs in its own subprocess and the dashboard picks
+    the result up from its existing /api/videos poll.
 
-    try:
-        meta = await asyncio.to_thread(_do_generate)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, str(e))
-    return {"ok": True, "title": meta["title"], "youtube_id": meta.get("youtube_id")}
+    Account/category/locale are still validated synchronously so genuine
+    input mistakes come back as a 400 rather than a silent background death.
+    """
+    account = get_account(req.account_id)
+    if not account:
+        raise HTTPException(400, f"Unknown account '{req.account_id}'")
+
+    cfg = json.loads(account.topic_config_path.read_text(encoding="utf-8")) \
+        if account.topic_config_path.exists() else {}
+    if req.category not in cfg.get("categories", {}):
+        raise HTTPException(400, f"Unknown category '{req.category}' for account '{req.account_id}'")
+
+    if req.locale.strip() and req.locale not in LOCALES:
+        raise HTTPException(400, f"Unknown locale '{req.locale}'")
+
+    global _generate_video_proc
+    if _generate_video_running() or _pipeline_running() or _lock_pid_alive():
+        return {"ok": False, "message": "A video generation is already in progress"}
+
+    args = [PYTHON, str(BASE_DIR / "generate_video_now.py"),
+            "--account", req.account_id, "--category", req.category]
+    if req.custom_topic.strip():
+        args += ["--topic", req.custom_topic.strip()]
+    if req.locale.strip():
+        args += ["--locale", req.locale.strip()]
+
+    _generate_video_proc = subprocess.Popen(
+        args,
+        cwd=str(BASE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return {"ok": True, "pid": _generate_video_proc.pid,
+            "message": "Video generation started — it will appear here (and on YouTube) in a few minutes."}
 
 
 # ── Locales (country/continent targeting) ──────────────────────────────────────
@@ -549,10 +612,10 @@ async def save_topic_config(payload: TopicConfigPayload):
 # ── Analytics ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/analytics")
-async def get_analytics():
-    """YouTube channel stats + recent video metrics using saved OAuth token."""
+async def get_analytics(account_id: str = "default"):
+    """YouTube channel stats + recent video metrics for the selected account."""
     try:
-        svc = _get_youtube_service()
+        svc = _get_youtube_service(_account_token_file(account_id))
 
         ch_resp = svc.channels().list(
             part="snippet,statistics,contentDetails",
@@ -622,7 +685,7 @@ _SHORTS_SUBS_TARGET    = 1000
 _SHORTS_VIEWS_TARGET   = 10_000_000
 
 @app.get("/api/monetization")
-async def get_monetization_progress():
+async def get_monetization_progress(account_id: str = "default"):
     """
     Real progress toward YouTube Partner Program eligibility, both paths:
       - Standard: 1,000 subscribers + 4,000 public watch hours (last 365 days)
@@ -630,14 +693,15 @@ async def get_monetization_progress():
     Requires the yt-analytics.readonly scope — re-run setup_auth.py once if
     the saved token predates it (it auto-detects and forces re-consent).
     """
+    token_file = _account_token_file(account_id)
     try:
-        yt_svc = _get_youtube_service()
+        yt_svc = _get_youtube_service(token_file)
         ch_resp = yt_svc.channels().list(part="statistics", mine=True).execute()
         if not ch_resp.get("items"):
             raise HTTPException(404, "No YouTube channel found for this account")
         subscribers = int(ch_resp["items"][0]["statistics"].get("subscriberCount", 0))
 
-        analytics_svc = _get_analytics_service()
+        analytics_svc = _get_analytics_service(token_file)
         today = datetime.now(IST).date()
 
         watch_resp = analytics_svc.reports().query(
@@ -705,12 +769,14 @@ async def manual_upload(
     privacy:       str               = Form("public"),
     schedule_time: Optional[str]     = Form(None),
     thumbnail:     Optional[UploadFile] = File(None),
+    account_id:    str               = Form("default"),
 ):
-    """Upload a video file directly to YouTube with metadata."""
+    """Upload a video file directly to YouTube with metadata, using the
+    selected account's own credentials."""
     tmp_video = None
     tmp_thumb = None
     try:
-        svc = _get_youtube_service()
+        svc = _get_youtube_service(_account_token_file(account_id))
 
         # Stream video to a temp file (avoids loading entire file into RAM)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
@@ -818,8 +884,19 @@ async def upload_generated_video(date: str, index: int, account_id: str = "defau
             # everything — this endpoint previously ignored the topic
             # category entirely, which is why manually-uploaded videos kept
             # landing in the wrong YouTube category regardless of topic.
+            # Read the category table from THIS account's own topic config,
+            # not the root-level one — that file is only the pre-migration
+            # copy, and post-migration the dashboard's Topics panel edits the
+            # per-account file, so the root copy drifts (and never described
+            # a non-default account in the first place).
+            account_cfg: dict = {}
+            if account and account.topic_config_path.exists():
+                try:
+                    account_cfg = json.loads(account.topic_config_path.read_text(encoding="utf-8"))
+                except Exception:
+                    account_cfg = {}
             category_key = s.get("_category", "")
-            category_info = _load_topic_config().get("categories", {}).get(category_key, {})
+            category_info = account_cfg.get("categories", {}).get(category_key, {})
             category_id = category_info.get("yt_category_id") or "25"
             category_label = category_info.get("label", category_key)
         except Exception:
@@ -1001,12 +1078,12 @@ async def list_shorts(date: Optional[str] = None, account_id: str = "default"):
                 "script_url": f"/api/shorts/{target}/{index}/script?account_id={account_id}",
                 "youtube_id": yt_id,
                 "youtube_url": yt_url,
-                "is_regenerating": _regen_running(_regen_key("short", target, index)),
+                "is_regenerating": _regen_running(_regen_key("short", target, index, account_id)),
             })
     return {
         "date": target,
         "shorts": shorts,
-        "is_generating": _short_proc_running() or _short_lock_pid_alive(),
+        "is_generating": _short_proc_running(account_id) or _short_lock_pid_alive(account_id),
     }
 
 @app.get("/api/shorts/{date}/{index}/thumbnail")
@@ -1049,8 +1126,6 @@ class GenerateShortPayload(BaseModel):
 
 @app.post("/api/shorts/generate")
 async def generate_short(payload: GenerateShortPayload):
-    global _short_proc
-
     topic = payload.topic.strip()
     if not topic and payload.feed not in ("india", "world", "business", "entertainment", "sports"):
         raise HTTPException(400, "feed must be one of: india, world, business, entertainment, sports")
@@ -1060,8 +1135,8 @@ async def generate_short(payload: GenerateShortPayload):
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
     count = max(1, min(payload.count, 10))
 
-    if _short_proc_running() or _short_lock_pid_alive():
-        return {"ok": False, "message": "A Short is already being generated"}
+    if _short_proc_running(payload.account_id) or _short_lock_pid_alive(payload.account_id):
+        return {"ok": False, "message": "A Short is already being generated for this account"}
 
     args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--locale", payload.locale, "--count", str(count),
             "--content-type", payload.content_type or "news", "--account", payload.account_id]
@@ -1070,13 +1145,14 @@ async def generate_short(payload: GenerateShortPayload):
     else:
         args += ["--feed", payload.feed]
 
-    _short_proc = subprocess.Popen(
+    proc = subprocess.Popen(
         args,
         cwd=str(BASE_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    return {"ok": True, "pid": _short_proc.pid,
+    _short_procs[payload.account_id] = proc
+    return {"ok": True, "pid": proc.pid,
             "message": f"Generating {count} Short(s) ({payload.locale})" if count > 1 else "Short generation started"}
 
 
@@ -1089,8 +1165,8 @@ class RegenerateShortPayload(BaseModel):
 @app.post("/api/shorts/{date}/{index}/regenerate")
 async def regenerate_short(date: str, index: int, payload: RegenerateShortPayload, account_id: str = "default"):
     """Regenerate an existing Short in place (new script + render, no auto-upload)."""
-    key = _regen_key("short", date, index)
-    if _regen_running(key) or _short_proc_running() or _short_lock_pid_alive():
+    key = _regen_key("short", date, index, account_id)
+    if _regen_running(key) or _short_proc_running(account_id) or _short_lock_pid_alive(account_id):
         return {"ok": False, "message": "A Short generation/regeneration is already in progress"}
 
     topic = payload.topic.strip()

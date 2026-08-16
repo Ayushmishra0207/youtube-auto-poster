@@ -60,7 +60,7 @@ export default function OverviewPanel() {
 
   const refresh = async (isFirst = false) => {
     try {
-      const [s, l] = await Promise.all([api.status(), api.logs(20, accountId)]);
+      const [s, l] = await Promise.all([api.status(accountId), api.logs(20, accountId)]);
       setStatus(s as PipelineStatus);
       setLogs((l as { logs: string[] }).logs);
       setError(false);

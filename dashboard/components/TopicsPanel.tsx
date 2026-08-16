@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type TopicConfigSlot } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import { Check, X, Pencil, ChevronDown, RefreshCw, Save } from "lucide-react";
 
 const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30"];
@@ -128,8 +129,17 @@ function CategoryDropdown({ value, categories, onSelect }: {
 }
 
 export default function TopicsPanel() {
+  // The pipeline reads accounts/<id>/topic_config.json (scheduler's
+  // _load_slot_plan), NOT the root-level topic_config.json this panel used to
+  // edit — after the one-time migration copy the two files diverge, so edits
+  // saved to the root file were silently ignored by every subsequent run.
+  const { accountId } = useAccount();
   const [slots, setSlots] = useState<TopicConfigSlot[]>([]);
   const [categories, setCategories] = useState<Record<string, Category>>({});
+  // The whole loaded config, kept so saving slots doesn't drop sibling keys.
+  // The per-account POST writes the body verbatim (unlike the old PUT, which
+  // merged server-side), so the categories table has to be sent back with it.
+  const [config, setConfig] = useState<Record<string, unknown>>({});
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -138,7 +148,8 @@ export default function TopicsPanel() {
 
   const load = async () => {
     try {
-      const cfg: any = await api.topicConfig();
+      const cfg: any = await api.getAccountTopicConfig(accountId);
+      setConfig(cfg ?? {});
       setCategories(cfg.categories ?? {});
       setSlots(
         cfg.slots?.length > 0
@@ -147,11 +158,13 @@ export default function TopicsPanel() {
       );
       setDirty(false);
     } catch {
+      setConfig({});
+      setCategories({});
       setSlots(SLOTS.map((slot) => ({ slot, category: "news_india", custom_topic: null })));
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [accountId]);
 
   const setCategory = (idx: number, cat: string) => {
     setSlots((prev) => prev.map((s, i) => i === idx ? { ...s, category: cat } : s));
@@ -178,7 +191,8 @@ export default function TopicsPanel() {
   const saveAll = async () => {
     setSaving(true);
     try {
-      await api.saveTopicConfig(slots);
+      await api.saveAccountTopicConfig(accountId, { ...config, slots });
+      setConfig((prev) => ({ ...prev, slots }));
       setDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -358,8 +372,10 @@ export default function TopicsPanel() {
 
       <p className="text-xs" style={{ color: "#334155" }}>
         Saved to{" "}
-        <code className="font-mono text-[11px]" style={{ color: "#475569" }}>topic_config.json</code>
-        {" "}— takes effect on the next pipeline run.
+        <code className="font-mono text-[11px]" style={{ color: "#475569" }}>
+          accounts/{accountId}/topic_config.json
+        </code>
+        {" "}— takes effect on the next pipeline run for this account.
       </p>
     </div>
   );

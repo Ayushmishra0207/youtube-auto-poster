@@ -20,16 +20,24 @@ export default function VideoGeneratePanel() {
     });
   }, [accountId]);
 
+  // Fire-and-forget: the backend spawns generate_video_now.py and answers
+  // straight away (mirroring the Shorts panel), so this only reports whether
+  // generation STARTED. The finished video — and its YouTube link — appears
+  // in the video grid, which polls /api/videos.
   const generate = async () => {
     setBusy(true);
-    setResult("Generating... this takes a few minutes.");
+    setResult("");
     try {
       const res = await api.generateVideo(accountId, category, customTopic, locale);
-      setResult(`Done: ${res.title} -> https://youtube.com/watch?v=${res.youtube_id}`);
+      if (res.ok === false) {
+        setResult(res.message ?? "Could not start generation");
+      } else {
+        setResult(res.message ?? "Generation started — the video will appear in the grid in a few minutes.");
+      }
     } catch (e) {
-      // Failures (unknown account/category, generation errors) come back as a
-      // non-2xx response — unwrap() in api.ts embeds the backend's real detail
-      // text in this Error's message, so surface that instead of a generic one.
+      // Input errors (unknown account/category/locale) come back as a non-2xx
+      // response — unwrap() in api.ts embeds the backend's real detail text in
+      // this Error's message, so surface that instead of a generic one.
       setResult(`Failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     setBusy(false);
@@ -57,7 +65,7 @@ export default function VideoGeneratePanel() {
           className="bg-transparent border border-slate-700 rounded-lg px-3 py-2 text-sm"
         />
         <button onClick={generate} disabled={busy || !category} className="bg-blue-600 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
-          {busy ? "Generating..." : "Generate"}
+          {busy ? "Starting…" : "Generate"}
         </button>
         {result && <p className="text-xs text-slate-400">{result}</p>}
       </div>

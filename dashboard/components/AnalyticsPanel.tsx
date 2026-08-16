@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import { Users, Eye, Film, ThumbsUp, MessageSquare, RefreshCw, ExternalLink, Lock, Globe } from "lucide-react";
 
 interface ChannelInfo {
@@ -80,6 +81,9 @@ function MiniBar({ value, max, color }: { value: number; max: number; color: str
 }
 
 export default function AnalyticsPanel() {
+  // Analytics must follow the sidebar's account switcher — otherwise account
+  // B's page silently shows account A's channel.
+  const { accountId } = useAccount();
   const [channel, setChannel] = useState<ChannelInfo | null>(null);
   const [videos, setVideos] = useState<RecentVideo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,7 +95,7 @@ export default function AnalyticsPanel() {
     else setLoading(true);
     setError(null);
     try {
-      const data: any = await api.analytics();
+      const data: any = await api.analytics(accountId);
       setChannel(data.channel);
       setVideos(data.recent_videos ?? []);
     } catch (e: any) {
@@ -102,7 +106,8 @@ export default function AnalyticsPanel() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [accountId]);
 
   const maxViews = Math.max(...videos.map((v) => v.views), 1);
 

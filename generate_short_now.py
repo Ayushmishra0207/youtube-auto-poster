@@ -39,7 +39,12 @@ _FOCUS_BY_FEED = {
     "sports": "Sports breaking news",
 }
 
-SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
+def short_lock_file(account_id: str = "default") -> Path:
+    """Per-account Shorts generation lock. Scoped by account id so a Short
+    rendering for one channel doesn't block every other channel — the lock is
+    only there to stop two renders of the SAME account's output tree from
+    racing. Must stay in sync with api/main.py's _short_lock_file()."""
+    return BASE_DIR / f"short_generate_{account_id}.lock"
 
 
 def build_short_script(feed: str = "india", topic: str = "", locale: Locale | None = None,
@@ -104,7 +109,7 @@ def _pid_running(pid: int) -> bool:
         return False
 
 
-def _try_create_lock() -> bool:
+def _try_create_lock(lock_file: Path) -> bool:
     """Atomically create the lock file with our PID. False if it already exists —
     O_CREAT|O_EXCL is a single kernel syscall, so two processes racing to create
     it can never both succeed (unlike a separate exists-check + write, which is
@@ -112,7 +117,7 @@ def _try_create_lock() -> bool:
     either had written its PID — the API's pre-spawn check alone can't close
     that window)."""
     try:
-        fd = os.open(str(SHORT_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
             f.write(str(os.getpid()))
         return True
@@ -120,21 +125,22 @@ def _try_create_lock() -> bool:
         return False
 
 
-def _acquire_lock() -> bool:
-    """Return True if the lock was acquired, False if another run is genuinely in progress."""
-    if _try_create_lock():
+def _acquire_lock(lock_file: Path) -> bool:
+    """Return True if the lock was acquired, False if another run for the same
+    account is genuinely in progress."""
+    if _try_create_lock(lock_file):
         return True
 
     try:
-        pid = int(SHORT_LOCK_FILE.read_text().strip())
+        pid = int(lock_file.read_text().strip())
         if _pid_running(pid):
             return False
-        log.info("Removing stale short_generate.lock (PID %d no longer running)", pid)
+        log.info("Removing stale %s (PID %d no longer running)", lock_file.name, pid)
     except Exception:
         pass
-    SHORT_LOCK_FILE.unlink(missing_ok=True)
+    lock_file.unlink(missing_ok=True)
 
-    return _try_create_lock()
+    return _try_create_lock(lock_file)
 
 
 def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale: Locale,
@@ -183,8 +189,10 @@ def main():
         log.error("Unknown account '%s'", args.account)
         sys.exit(1)
 
-    if not _acquire_lock():
-        log.warning("[manual-short] Another Short generation is already in progress — aborting this run.")
+    lock_file = short_lock_file(account.id)
+    if not _acquire_lock(lock_file):
+        log.warning("[manual-short] Another Short generation is already in progress for account '%s' "
+                    "— aborting this run.", account.id)
         sys.exit(1)
     try:
         account_output_dir = account.output_dir
@@ -210,7 +218,7 @@ def main():
         log.error("[manual-short] Failed: %s", exc, exc_info=True)
         sys.exit(1)
     finally:
-        SHORT_LOCK_FILE.unlink(missing_ok=True)
+        lock_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -126,14 +126,18 @@ export const api = {
   login,
   logout:          ()                          => post("/api/auth/logout"),
   me:              ()                          => get<{ user: { id: number; username: string } }>("/api/auth/me"),
-  status:          ()                          => get("/api/status"),
+  status:          (accountId?: string)        => get(`/api/status${qs({ account_id: accountId })}`),
   videos:          (date?: string, accountId?: string) => get(`/api/videos${qs({ date, account_id: accountId })}`),
   topics:          ()                          => get("/api/topics"),
   setTopics:       (topics: string[])          => post("/api/topics", { topics }),
   clearTopics:     ()                          => del("/api/topics"),
+  // Legacy root-level topic_config.json routes. The pipeline reads
+  // accounts/<id>/topic_config.json, so the UI uses
+  // get/saveAccountTopicConfig below — these are kept only as the raw
+  // pre-multi-account endpoints and are not wired to any panel.
   topicConfig:     ()                          => get("/api/topic-config"),
   saveTopicConfig: (slots: TopicConfigSlot[])  => put("/api/topic-config", { slots }),
-  analytics:       ()                          => get("/api/analytics"),
+  analytics:       (accountId?: string)        => get(`/api/analytics${qs({ account_id: accountId })}`),
   run:             ()                          => post("/api/run"),
   logs:            (lines = 150, accountId?: string) => get<{ logs: string[] }>(`/api/logs${qs({ lines, account_id: accountId })}`),
   settings:        ()                          => get("/api/settings"),
@@ -156,14 +160,21 @@ export const api = {
     post<GenerateVideoResult>("/api/videos/generate", { account_id: accountId, category, custom_topic: customTopic, locale }),
 };
 
-// Shape of POST /api/videos/generate's response (api/main.py's generate_video) —
-// this is only ever reached on success (2xx); failures (unknown account/category,
-// generation errors) come back as a non-2xx HTTPException, which unwrap() turns
-// into a thrown Error carrying the backend's detail text instead of a value here.
+// Shape of POST /api/videos/generate's response (api/main.py's generate_video).
+//
+// Fire-and-forget, exactly like /api/shorts/generate: the endpoint validates
+// the account/category/locale, spawns generate_video_now.py, and returns
+// immediately — generation + upload takes minutes, far longer than this
+// client's 20s fetch timeout. There is no youtube_id to return yet; the
+// finished video shows up through the existing /api/videos poll.
+//
+// ok:false + message means "couldn't start" (something already running).
+// Genuine input errors come back as a non-2xx HTTPException, which unwrap()
+// turns into a thrown Error carrying the backend's detail text.
 export interface GenerateVideoResult {
   ok: boolean;
-  title: string;
-  youtube_id?: string;
+  pid?: number;
+  message?: string;
 }
 
 export interface TopicConfigSlot {

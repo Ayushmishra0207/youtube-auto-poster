@@ -11,6 +11,7 @@ output/
 logs/
 pipeline.lock
 short_generate.lock
+short_generate_*.lock
 engagement_state.json
 instagram_queue.json
 shorts_topic_history.json
@@ -18,6 +19,8 @@ longform_topic_history.json
 youtube_playlists.json
 growth_audit_baseline.json
 growth_audit_history.json
+accounts.json
+accounts/
 *.log
 
 # ── Python ────────────────────────────────────────────────────

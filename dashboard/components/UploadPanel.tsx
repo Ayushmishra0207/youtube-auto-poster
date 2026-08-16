@@ -6,6 +6,7 @@ import {
   ExternalLink, Image, Clock, Tag, AlignLeft, Hash,
 } from "lucide-react";
 import { authHeaders } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -85,6 +86,7 @@ function StyledSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
 }
 
 export default function UploadPanel() {
+  const { accountId } = useAccount();
   const [videoFile, setVideoFile]       = useState<File | null>(null);
   const [thumbFile, setThumbFile]       = useState<File | null>(null);
   const [title, setTitle]               = useState("");
@@ -127,6 +129,9 @@ export default function UploadPanel() {
     fd.append("privacy", privacy);
     if (scheduleTime) fd.append("schedule_time", new Date(scheduleTime).toISOString());
     if (thumbFile) fd.append("thumbnail", thumbFile);
+    // Upload under the account currently selected in the sidebar switcher,
+    // not always the default channel.
+    fd.append("account_id", accountId);
 
     try {
       const res = await fetch(`${BASE}/api/upload`, { method: "POST", headers: authHeaders(), body: fd });
