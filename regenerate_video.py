@@ -11,14 +11,18 @@ Usage:
 import argparse
 import shutil
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config import NEWS_CATEGORIES, NEWS_TTS_RATE, OUTPUT_DIR
+from pipeline.accounts import get_account
 from pipeline.locales import get_locale
 from pipeline.logger import log
 from scheduler import _load_slot_plan, _run_single_video
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def main():
@@ -26,15 +30,21 @@ def main():
     parser.add_argument("--date", required=True, help="Output date folder, e.g. 2026-07-18")
     parser.add_argument("--index", type=int, required=True, help="Video slot index (1-7)")
     parser.add_argument("--locale", default="", help="Override the slot's configured locale for this regeneration")
+    parser.add_argument("--account", default="default", help="Account id")
     args = parser.parse_args()
 
-    base_dir = Path(OUTPUT_DIR) / args.date
+    account = get_account(args.account)
+    if not account:
+        log.error("Unknown account '%s'", args.account)
+        sys.exit(1)
+
+    base_dir = account.output_dir / args.date if args.date else account.output_dir / datetime.now(IST).strftime("%Y-%m-%d")
     work_dir = base_dir / f"video_{args.index:02d}"
 
     if work_dir.exists():
         shutil.rmtree(work_dir, ignore_errors=True)
 
-    slot_plan = _load_slot_plan()
+    slot_plan = _load_slot_plan(account)
     if args.index < 1 or args.index > len(slot_plan):
         log.error("Regenerate video: index %d out of range (1-%d)", args.index, len(slot_plan))
         sys.exit(1)
@@ -56,6 +66,7 @@ def main():
         category_color=plan.get("category_color", ""),
         category_label=plan.get("category_label", ""),
         locale=locale,
+        account_dir=account.dir,
     )
     if not meta:
         log.error("[regen-video %d] Failed", args.index)
