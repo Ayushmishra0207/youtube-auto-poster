@@ -14,10 +14,11 @@ import LogViewer from "@/components/LogViewer";
 import ScheduleTimeline from "@/components/ScheduleTimeline";
 import SettingsPanel from "@/components/SettingsPanel";
 import UploadPanel from "@/components/UploadPanel";
+import AccountsPanel from "@/components/AccountsPanel";
 import LoginScreen from "@/components/LoginScreen";
 import { api, clearToken, getToken } from "@/lib/api";
 
-export type Tab = "overview" | "analytics" | "topics" | "videos" | "shorts" | "instagram" | "upload" | "logs" | "schedule" | "settings";
+export type Tab = "overview" | "analytics" | "topics" | "videos" | "shorts" | "instagram" | "upload" | "logs" | "schedule" | "accounts" | "settings";
 
 export default function Dashboard() {
   const [tab, setTab]               = useState<Tab>("overview");
@@ -83,6 +84,7 @@ export default function Dashboard() {
           {tab === "upload"     && <UploadPanel />}
           {tab === "logs"       && <LogViewer />}
           {tab === "schedule"   && <ScheduleTimeline />}
+          {tab === "accounts"   && <AccountsPanel />}
           {tab === "settings"   && <SettingsPanel />}
         </div>
       </main>
