@@ -45,6 +45,7 @@ from pipeline.image_fetcher import fetch_all_section_images
 from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
 from pipeline.logger import log
 from pipeline.script_generator import generate_script
+from pipeline.shorts_config import load_shorts_config
 from pipeline.shorts_creator import create_short
 from pipeline.text_utils import safe_truncate
 from pipeline.topic_history import filter_fresh, is_duplicate, record_topic
@@ -462,7 +463,7 @@ def run_pipeline_for_account(account):
 
     # __ YouTube Shorts (5 per day: India / World / Business / Entertainment / Sports breaking news) ___
     try:
-        _run_shorts(base_dir)
+        _run_shorts(base_dir, account)
     except Exception as e:
         log.error("Shorts stage failed: %s", e, exc_info=True)
 
@@ -502,21 +503,27 @@ _SHORTS_PLAN = [
 ]
 
 
-def _run_shorts(base_dir: Path):
+def _run_shorts(base_dir: Path, account):
     """Generate and upload the daily YouTube Shorts (breaking news, natural-paced voice)."""
     log.info("-" * 60)
-    log.info("Generating %d YouTube Shorts...", SHORTS_PER_DAY)
 
-    for i in range(1, SHORTS_PER_DAY + 1):
-        plan = _SHORTS_PLAN[(i - 1) % len(_SHORTS_PLAN)]
+    cfg = load_shorts_config(account)
+    shorts_per_day = cfg.get("shorts_per_day", SHORTS_PER_DAY)
+    feeds = cfg.get("feeds") or ["india", "world", "business"]
+    plan = [{"feed": f, "focus": f"{f.title()} breaking news"} for f in feeds]
+
+    log.info("Generating %d YouTube Shorts...", shorts_per_day)
+
+    for i in range(1, shorts_per_day + 1):
+        plan_entry = plan[(i - 1) % len(plan)]
         work_dir = base_dir / f"short_{i:02d}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        locale = get_locale(plan.get("locale") or DEFAULT_LOCALE)
+        locale = get_locale(plan_entry.get("locale") or DEFAULT_LOCALE)
         try:
             # 1-2. Real headlines + script (Claude → OpenRouter → Gemini chain)
             try:
-                script = build_short_script(feed=plan["feed"], locale=locale)
+                script = build_short_script(feed=plan_entry["feed"], locale=locale, account=account)
             except ValueError as exc:
                 log.warning("Short %d: %s — skipping", i, exc)
                 continue
@@ -542,6 +549,7 @@ def _run_shorts(base_dir: Path):
                 tags=script.get("tags", []),
                 publish_at_utc=_ist_slot_to_utc(slot),
                 yt_language=locale.yt_language,
+                token_file=account.token_file,
             )
 
             try:
