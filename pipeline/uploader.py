@@ -18,6 +18,7 @@ import json
 import os
 import pickle
 from datetime import datetime, timezone
+from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -36,7 +37,8 @@ from config import (
 from pipeline.logger import log
 from pipeline.text_utils import safe_truncate
 
-PLAYLIST_CACHE_FILE = BASE_DIR / "youtube_playlists.json"  # {category_key: playlist_id}
+def _playlist_cache_file(cache_dir: Path | None = None) -> Path:
+    return (cache_dir or BASE_DIR) / "youtube_playlists.json"
 
 # youtube scope is a superset of youtube.upload and also allows thumbnail management.
 # yt-analytics.readonly enables watch-hours/Shorts-views queries for monetization tracking.
@@ -51,11 +53,12 @@ SCOPES = [
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
-def _get_service():
+def _get_service(token_file: str | None = None):
+    token_path = token_file or YOUTUBE_TOKEN_FILE
     creds = None
 
-    if os.path.exists(YOUTUBE_TOKEN_FILE):
-        with open(YOUTUBE_TOKEN_FILE, "rb") as f:
+    if os.path.exists(token_path):
+        with open(token_path, "rb") as f:
             creds = pickle.load(f)
 
     if not creds or not creds.valid:
@@ -74,7 +77,7 @@ def _get_service():
             )
             creds = flow.run_local_server(port=0)
 
-        with open(YOUTUBE_TOKEN_FILE, "wb") as f:
+        with open(token_path, "wb") as f:
             pickle.dump(creds, f)
 
     return build("youtube", "v3", credentials=creds)
@@ -90,6 +93,7 @@ def upload_video(
     publish_at_utc: datetime,
     category_id: str = YT_CATEGORY_ID,
     yt_language: str = YT_DEFAULT_LANGUAGE,
+    token_file: str | None = None,
 ) -> str:
     """
     Upload video_path to YouTube and schedule it for publish_at_utc.
@@ -98,7 +102,7 @@ def upload_video(
 
     Returns the YouTube video ID.
     """
-    svc = _get_service()
+    svc = _get_service(token_file)
 
     if publish_at_utc.tzinfo is None:
         publish_at_utc = publish_at_utc.replace(tzinfo=timezone.utc)
@@ -144,13 +148,13 @@ def upload_video(
 # top-level comments ARE a real, supported endpoint — this posts a channel-
 # owner CTA comment on a freshly uploaded video/Short to prime engagement.
 
-def post_engagement_comment(video_id: str, text: str) -> bool:
+def post_engagement_comment(video_id: str, text: str, token_file: str | None = None) -> bool:
     """
     Post a top-level comment as the channel owner on video_id.
     Returns True on success, False on failure (e.g. comments disabled).
     """
     try:
-        svc = _get_service()
+        svc = _get_service(token_file)
         svc.commentThreads().insert(
             part="snippet",
             body={
@@ -170,7 +174,7 @@ def post_engagement_comment(video_id: str, text: str) -> bool:
         return False
 
 
-def upload_thumbnail(video_id: str, thumbnail_path: str) -> bool:
+def upload_thumbnail(video_id: str, thumbnail_path: str, token_file: str | None = None) -> bool:
     """
     Set a custom thumbnail for an already-uploaded video.
 
@@ -182,7 +186,7 @@ def upload_thumbnail(video_id: str, thumbnail_path: str) -> bool:
         return False
 
     try:
-        svc = _get_service()
+        svc = _get_service(token_file)
         media = MediaFileUpload(thumbnail_path, mimetype="image/jpeg")
         svc.thumbnails().set(videoId=video_id, media_body=media).execute()
         log.info("Thumbnail uploaded for video %s", video_id)
@@ -208,29 +212,31 @@ def upload_thumbnail(video_id: str, thumbnail_path: str) -> bool:
 # videos needs. One playlist per topic_config.json category, created lazily
 # and cached locally so repeated uploads reuse the same playlist.
 
-def _load_playlist_cache() -> dict:
-    if PLAYLIST_CACHE_FILE.exists():
+def _load_playlist_cache(cache_dir: Path | None = None) -> dict:
+    cache_file = _playlist_cache_file(cache_dir)
+    if cache_file.exists():
         try:
-            return json.loads(PLAYLIST_CACHE_FILE.read_text(encoding="utf-8"))
+            return json.loads(cache_file.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
 
 
-def _save_playlist_cache(cache: dict) -> None:
-    PLAYLIST_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+def _save_playlist_cache(cache: dict, cache_dir: Path | None = None) -> None:
+    cache_file = _playlist_cache_file(cache_dir)
+    cache_file.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _get_or_create_playlist(category: str, label: str) -> str | None:
+def _get_or_create_playlist(category: str, label: str, token_file: str | None = None, cache_dir: Path | None = None) -> str | None:
     """Return the cached playlist ID for `category`, creating it on first use."""
     if not category:
         return None
-    cache = _load_playlist_cache()
+    cache = _load_playlist_cache(cache_dir)
     if category in cache:
         return cache[category]
 
     try:
-        svc = _get_service()
+        svc = _get_service(token_file)
         resp = svc.playlists().insert(
             part="snippet,status",
             body={
@@ -243,7 +249,7 @@ def _get_or_create_playlist(category: str, label: str) -> str | None:
         ).execute()
         playlist_id = resp["id"]
         cache[category] = playlist_id
-        _save_playlist_cache(cache)
+        _save_playlist_cache(cache, cache_dir)
         log.info("Created playlist '%s' (%s) for category '%s'", label, playlist_id, category)
         return playlist_id
     except Exception as exc:
@@ -251,13 +257,13 @@ def _get_or_create_playlist(category: str, label: str) -> str | None:
         return None
 
 
-def add_video_to_playlist(video_id: str, category: str, label: str = "") -> bool:
+def add_video_to_playlist(video_id: str, category: str, label: str = "", token_file: str | None = None, cache_dir: Path | None = None) -> bool:
     """Add video_id to its category's playlist (creating the playlist on first use)."""
-    playlist_id = _get_or_create_playlist(category, label)
+    playlist_id = _get_or_create_playlist(category, label, token_file, cache_dir)
     if not playlist_id:
         return False
     try:
-        svc = _get_service()
+        svc = _get_service(token_file)
         svc.playlistItems().insert(
             part="snippet",
             body={
@@ -283,12 +289,12 @@ def add_video_to_playlist(video_id: str, category: str, label: str = "") -> bool
 # ASR for TTS-narrated content and make the video's own words indexable for
 # search — both a distribution and an accessibility win.
 
-def upload_captions(video_id: str, srt_text: str, language: str = "hi") -> bool:
+def upload_captions(video_id: str, srt_text: str, language: str = "hi", token_file: str | None = None) -> bool:
     """Upload a timed caption track (SRT) for video_id. No-op if srt_text is empty."""
     if not srt_text.strip():
         return False
     try:
-        svc = _get_service()
+        svc = _get_service(token_file)
         media = MediaInMemoryUpload(srt_text.encode("utf-8"), mimetype="application/octet-stream")
         svc.captions().insert(
             part="snippet",
