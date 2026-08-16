@@ -312,27 +312,40 @@ def _load_topic_config() -> dict:
         return json.loads(TOPIC_CONFIG.read_text(encoding="utf-8"))
     return {"slots": [], "categories": {}}
 
-def _get_youtube_credentials():
+def _get_youtube_credentials(token_file: str | None = None):
+    """
+    token_file: an Account.token_file value (e.g. "youtube_token_myaccount.pickle"),
+    relative to BASE_DIR, same convention as Account.token_path. None (or the
+    default account's own "youtube_token.pickle") resolves to the existing
+    global TOKEN_FILE constant, preserving prior behavior — including the
+    cloud YOUTUBE_TOKEN_B64 seeding, which only applies to that single
+    default-account token, not to per-account tokens.
+    """
     from google.auth.transport.requests import Request
 
-    # Cloud deployment: load token from YOUTUBE_TOKEN_B64 env var if file absent
-    if not TOKEN_FILE.exists():
-        token_b64 = os.environ.get("YOUTUBE_TOKEN_B64", "")
-        if not token_b64:
-            raise HTTPException(503, "YouTube token not found. Set YOUTUBE_TOKEN_B64 env var or run setup_auth.py locally.")
-        TOKEN_FILE.write_bytes(base64.b64decode(token_b64))
+    token_path = (BASE_DIR / token_file) if token_file else TOKEN_FILE
 
-    with open(TOKEN_FILE, "rb") as f:
+    if not token_path.exists():
+        if token_path == TOKEN_FILE:
+            # Cloud deployment: load token from YOUTUBE_TOKEN_B64 env var if file absent
+            token_b64 = os.environ.get("YOUTUBE_TOKEN_B64", "")
+            if not token_b64:
+                raise HTTPException(503, "YouTube token not found. Set YOUTUBE_TOKEN_B64 env var or run setup_auth.py locally.")
+            token_path.write_bytes(base64.b64decode(token_b64))
+        else:
+            raise HTTPException(503, f"YouTube token not found for this account ({token_path.name}). Run setup_auth.py for it locally.")
+
+    with open(token_path, "rb") as f:
         creds = pickle.load(f)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        with open(TOKEN_FILE, "wb") as f:
+        with open(token_path, "wb") as f:
             pickle.dump(creds, f)
     return creds
 
-def _get_youtube_service():
+def _get_youtube_service(token_file: str | None = None):
     from googleapiclient.discovery import build
-    return build("youtube", "v3", credentials=_get_youtube_credentials())
+    return build("youtube", "v3", credentials=_get_youtube_credentials(token_file))
 
 def _get_analytics_service():
     from googleapiclient.discovery import build
@@ -774,6 +787,7 @@ async def manual_upload(
 @app.post("/api/upload-generated/{date}/{index}")
 async def upload_generated_video(date: str, index: int, account_id: str = "default"):
     """Upload an already-generated pipeline video to YouTube."""
+    account    = get_account(account_id)
     vdir       = _video_dir(date, index, account_id)
     video_path = vdir / "final.mp4"
     thumb_path = vdir / "thumbnail.jpg"
@@ -827,7 +841,8 @@ async def upload_generated_video(date: str, index: int, account_id: str = "defau
 
     def _do_upload() -> dict:
         """Blocking upload — runs in a worker thread so the event loop stays free."""
-        svc = _get_youtube_service()
+        token_file = account.token_file if account else None
+        svc = _get_youtube_service(token_file)
 
         from googleapiclient.http import MediaFileUpload
         media = MediaFileUpload(
@@ -861,7 +876,8 @@ async def upload_generated_video(date: str, index: int, account_id: str = "defau
         from pipeline.uploader import add_video_to_playlist, upload_captions
         from pipeline.video_creator import build_captions_srt
         try:
-            add_video_to_playlist(video_id, category_key, category_label)
+            add_video_to_playlist(video_id, category_key, category_label,
+                                   token_file=token_file, cache_dir=account.dir if account else None)
         except Exception:
             pass
         try:
@@ -869,7 +885,7 @@ async def upload_generated_video(date: str, index: int, account_id: str = "defau
             voice_paths = [str(vdir / "voices" / f"voice_{s.get('id', i):02d}.mp3")
                           for i, s in enumerate(sections)]
             srt_text = build_captions_srt(script_data, voice_paths)
-            upload_captions(video_id, srt_text, language=script_data.get("_locale", "hi"))
+            upload_captions(video_id, srt_text, language=script_data.get("_locale", "hi"), token_file=token_file)
         except Exception:
             pass
 
@@ -1100,6 +1116,7 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
 @app.post("/api/shorts/upload/{date}/{index}")
 async def upload_generated_short(date: str, index: int, account_id: str = "default"):
     """Upload an already-generated Short to YouTube as a Short (#Shorts)."""
+    account    = get_account(account_id)
     sdir       = _short_dir(date, index, account_id)
     video_path = sdir / "short.mp4"
     thumb_path = sdir / "thumbnail.jpg"
@@ -1139,7 +1156,7 @@ async def upload_generated_short(date: str, index: int, account_id: str = "defau
     }
 
     def _do_upload() -> dict:
-        svc = _get_youtube_service()
+        svc = _get_youtube_service(account.token_file if account else None)
         from googleapiclient.http import MediaFileUpload
         media = MediaFileUpload(
             str(video_path), mimetype="video/mp4",
