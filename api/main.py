@@ -229,8 +229,10 @@ async def me(request: Request):
 def _today() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d")
 
-def _video_dir(date: str, index: int) -> Path:
-    return OUTPUT_DIR / date / f"video_{index:02d}"
+def _video_dir(date: str, index: int, account_id: str = "default") -> Path:
+    account = get_account(account_id)
+    base = account.output_dir if account else OUTPUT_DIR
+    return base / date / f"video_{index:02d}"
 
 def _pipeline_running() -> bool:
     global _pipeline_proc
@@ -359,9 +361,11 @@ async def status():
 # ── Videos ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/videos")
-async def list_videos(date: Optional[str] = None):
+async def list_videos(date: Optional[str] = None, account_id: str = "default"):
     target = date or _today()
-    today_dir = OUTPUT_DIR / target
+    account = get_account(account_id)
+    base_dir = account.output_dir if account else OUTPUT_DIR
+    today_dir = base_dir / target
     videos = []
     if today_dir.exists():
         dirs = sorted(d for d in today_dir.iterdir() if d.is_dir() and d.name.startswith("video_"))
@@ -412,13 +416,13 @@ class RegenerateVideoPayload(BaseModel):
     locale: str = ""  # optional override; empty = keep the slot's configured locale
 
 @app.post("/api/videos/{date}/{index}/regenerate")
-async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayload = RegenerateVideoPayload()):
+async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayload = RegenerateVideoPayload(), account_id: str = "default"):
     """Regenerate an existing video slot in place (new script/voice/images/render, no auto-upload)."""
     key = _regen_key("video", date, index)
     if _regen_running(key) or _pipeline_running() or _lock_pid_alive():
         return {"ok": False, "message": "A video generation/regeneration is already in progress"}
 
-    args = [PYTHON, str(BASE_DIR / "regenerate_video.py"), "--date", date, "--index", str(index)]
+    args = [PYTHON, str(BASE_DIR / "regenerate_video.py"), "--date", date, "--index", str(index), "--account", account_id]
     if payload.locale.strip():
         if payload.locale not in LOCALES:
             raise HTTPException(400, f"Unknown locale '{payload.locale}'")
@@ -432,6 +436,29 @@ async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayloa
     )
     _regen_procs[key] = proc
     return {"ok": True, "pid": proc.pid, "message": f"Regenerating video {index}"}
+
+
+class GenerateVideoRequest(BaseModel):
+    account_id: str
+    category: str
+    custom_topic: str = ""
+    locale: str = ""
+
+@app.post("/api/videos/generate")
+async def generate_video(req: GenerateVideoRequest):
+    """On-demand long-form generation for a given account + category (real generation + upload)."""
+    from scheduler import generate_video_now
+
+    def _do_generate():
+        return generate_video_now(req.account_id, req.category, req.custom_topic, req.locale)
+
+    try:
+        meta = await asyncio.to_thread(_do_generate)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True, "title": meta["title"], "youtube_id": meta.get("youtube_id")}
 
 
 # ── Locales (country/continent targeting) ──────────────────────────────────────
@@ -745,9 +772,9 @@ async def manual_upload(
 # ── Upload a pipeline-generated video to YouTube ───────────────────────────────
 
 @app.post("/api/upload-generated/{date}/{index}")
-async def upload_generated_video(date: str, index: int):
+async def upload_generated_video(date: str, index: int, account_id: str = "default"):
     """Upload an already-generated pipeline video to YouTube."""
-    vdir       = _video_dir(date, index)
+    vdir       = _video_dir(date, index, account_id)
     video_path = vdir / "final.mp4"
     thumb_path = vdir / "thumbnail.jpg"
     script_path= vdir / "script.json"
@@ -880,8 +907,10 @@ async def run_pipeline():
 
 # ── YouTube Shorts ───────────────────────────────────────────────────────────────
 
-def _short_dir(date: str, index: int) -> Path:
-    return OUTPUT_DIR / date / f"short_{index:02d}"
+def _short_dir(date: str, index: int, account_id: str = "default") -> Path:
+    account = get_account(account_id)
+    base = account.output_dir if account else OUTPUT_DIR
+    return base / date / f"short_{index:02d}"
 
 def _ensure_short_thumbnail(short_dir: Path) -> bool:
     """
@@ -914,9 +943,11 @@ def _ensure_short_thumbnail(short_dir: Path) -> bool:
         return False
 
 @app.get("/api/shorts")
-async def list_shorts(date: Optional[str] = None):
+async def list_shorts(date: Optional[str] = None, account_id: str = "default"):
     target = date or _today()
-    today_dir = OUTPUT_DIR / target
+    account = get_account(account_id)
+    base_dir = account.output_dir if account else OUTPUT_DIR
+    today_dir = base_dir / target
     shorts = []
     if today_dir.exists():
         dirs = sorted(d for d in today_dir.iterdir() if d.is_dir() and d.name.startswith("short_"))
@@ -963,8 +994,8 @@ async def list_shorts(date: Optional[str] = None):
     }
 
 @app.get("/api/shorts/{date}/{index}/thumbnail")
-async def serve_short_thumbnail(date: str, index: int):
-    short_dir = _short_dir(date, index)
+async def serve_short_thumbnail(date: str, index: int, account_id: str = "default"):
+    short_dir = _short_dir(date, index, account_id)
     path = short_dir / "thumbnail.jpg"
     if not path.exists():
         _ensure_short_thumbnail(short_dir)
@@ -973,15 +1004,15 @@ async def serve_short_thumbnail(date: str, index: int):
     return FileResponse(path, media_type="image/jpeg")
 
 @app.get("/api/shorts/{date}/{index}/video")
-async def serve_short_video(date: str, index: int):
-    path = _short_dir(date, index) / "short.mp4"
+async def serve_short_video(date: str, index: int, account_id: str = "default"):
+    path = _short_dir(date, index, account_id) / "short.mp4"
     if not path.exists():
         raise HTTPException(404, "Video not found")
     return FileResponse(path, media_type="video/mp4")
 
 @app.get("/api/shorts/{date}/{index}/script")
-async def serve_short_script(date: str, index: int):
-    path = _short_dir(date, index) / "script.json"
+async def serve_short_script(date: str, index: int, account_id: str = "default"):
+    path = _short_dir(date, index, account_id) / "script.json"
     if not path.exists():
         raise HTTPException(404, "Script not found")
     return json.loads(path.read_text(encoding="utf-8"))
@@ -1039,7 +1070,7 @@ class RegenerateShortPayload(BaseModel):
     locale: str = DEFAULT_LOCALE
 
 @app.post("/api/shorts/{date}/{index}/regenerate")
-async def regenerate_short(date: str, index: int, payload: RegenerateShortPayload):
+async def regenerate_short(date: str, index: int, payload: RegenerateShortPayload, account_id: str = "default"):
     """Regenerate an existing Short in place (new script + render, no auto-upload)."""
     key = _regen_key("short", date, index)
     if _regen_running(key) or _short_proc_running() or _short_lock_pid_alive():
@@ -1054,7 +1085,7 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
 
     args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--date", date, "--index", str(index),
-            "--locale", payload.locale, "--content-type", payload.content_type or "news"]
+            "--locale", payload.locale, "--content-type", payload.content_type or "news", "--account", account_id]
     args += ["--topic", topic] if topic else ["--feed", payload.feed]
 
     proc = subprocess.Popen(
@@ -1067,9 +1098,9 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
     return {"ok": True, "pid": proc.pid, "message": f"Regenerating short {index}"}
 
 @app.post("/api/shorts/upload/{date}/{index}")
-async def upload_generated_short(date: str, index: int):
+async def upload_generated_short(date: str, index: int, account_id: str = "default"):
     """Upload an already-generated Short to YouTube as a Short (#Shorts)."""
-    sdir       = _short_dir(date, index)
+    sdir       = _short_dir(date, index, account_id)
     video_path = sdir / "short.mp4"
     thumb_path = sdir / "thumbnail.jpg"
     script_path= sdir / "script.json"
@@ -1149,7 +1180,12 @@ async def upload_generated_short(date: str, index: int):
 # ── Logs ───────────────────────────────────────────────────────────────────────
 
 @app.get("/api/logs")
-async def get_logs(lines: int = 150):
+async def get_logs(lines: int = 150, account_id: str = "default"):
+    # logs/pipeline.log is a single global file shared by every account today
+    # (no per-account log path exists yet) — account_id is still accepted
+    # here for consistency with /api/videos and /api/shorts, since the
+    # dashboard will send it uniformly across all three (Task 17), but it
+    # doesn't change which file gets read.
     return {"logs": _tail_log(lines)}
 
 
@@ -1266,22 +1302,22 @@ async def save_account_shorts_config(account_id: str, body: dict):
 # ── File serving ───────────────────────────────────────────────────────────────
 
 @app.get("/api/videos/{date}/{index}/thumbnail")
-async def serve_thumbnail(date: str, index: int):
-    path = _video_dir(date, index) / "thumbnail.jpg"
+async def serve_thumbnail(date: str, index: int, account_id: str = "default"):
+    path = _video_dir(date, index, account_id) / "thumbnail.jpg"
     if not path.exists():
         raise HTTPException(404, "Thumbnail not found")
     return FileResponse(path, media_type="image/jpeg")
 
 @app.get("/api/videos/{date}/{index}/video")
-async def serve_video(date: str, index: int):
-    path = _video_dir(date, index) / "final.mp4"
+async def serve_video(date: str, index: int, account_id: str = "default"):
+    path = _video_dir(date, index, account_id) / "final.mp4"
     if not path.exists():
         raise HTTPException(404, "Video not found")
     return FileResponse(path, media_type="video/mp4")
 
 @app.get("/api/videos/{date}/{index}/script")
-async def serve_script(date: str, index: int):
-    path = _video_dir(date, index) / "script.json"
+async def serve_script(date: str, index: int, account_id: str = "default"):
+    path = _video_dir(date, index, account_id) / "script.json"
     if not path.exists():
         raise HTTPException(404, "Script not found")
     return json.loads(path.read_text(encoding="utf-8"))
