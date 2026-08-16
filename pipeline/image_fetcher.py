@@ -28,6 +28,61 @@ TIMEOUT    = 15
 MAX_IMAGES_PER_SECTION = 10  # number of images per section
 
 
+# ── Pexels relevance check ─────────────────────────────────────────────────────
+# Pexels' own search is a blind keyword match with no semantic disambiguation —
+# an ambiguous query like "Congress party protest press conference" (India's
+# Congress party) can return a generic press-conference clip from anywhere in
+# the world, and the code used to accept whichever result landed at a fixed
+# round-robin index with zero check. Both photo and video results always carry
+# a descriptive slug in their own `url` (Pexels auto-generates it from the
+# asset's title), and photos also carry a separate `alt` text — use whichever
+# text Pexels gives us to reject a result with no real overlap with the query.
+
+_PEXELS_SLUG_RE = re.compile(r"/(?:photo|video)/([a-z0-9-]+)-\d+/?$")
+
+
+def _pexels_slug_text(url: str) -> str:
+    m = _PEXELS_SLUG_RE.search(url or "")
+    return m.group(1).replace("-", " ") if m else ""
+
+
+def _relevance_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3}
+
+
+def _matches_query(query: str, *texts: str) -> bool:
+    """
+    Loose overlap check (not the strict Wikipedia one below — Pexels'
+    alt/slug text is a full descriptive phrase, not a title, so requiring
+    "no extra words" would reject almost everything). No text to check
+    against at all means we can't reject, so it passes rather than
+    discarding a possibly-fine result for lack of data.
+    """
+    query_words = _relevance_words(query)
+    text_words: set[str] = set()
+    for t in texts:
+        text_words |= _relevance_words(t)
+    if not query_words or not text_words:
+        return True
+    overlap = query_words & text_words
+    return len(overlap) / len(query_words) >= 0.34
+
+
+def _best_matching_index(items: list, query: str, preferred_idx: int, text_fn) -> int | None:
+    """
+    Prefer `preferred_idx` (keeps the existing per-slot variety cycling) if
+    it's a plausible match for the query; otherwise scan the other returned
+    results for one that is. None means nothing among the returned results
+    plausibly matches — better to fall through to the next image source
+    than confidently attach an unrelated clip/photo.
+    """
+    order = [preferred_idx] + [i for i in range(len(items)) if i != preferred_idx]
+    for i in order:
+        if _matches_query(query, text_fn(items[i])):
+            return i
+    return None
+
+
 # ── Pexels fallback ───────────────────────────────────────────────────────────
 
 @with_retry(max_attempts=3, base_delay=2.0, exceptions=(requests.exceptions.RequestException,))
@@ -43,7 +98,13 @@ def _fetch_pexels(query: str, api_key: str, output_path: str, result_index: int,
     photos = resp.json().get("photos", [])
     if not photos:
         return None
-    idx     = min(result_index, len(photos) - 1)
+    idx = _best_matching_index(
+        photos, query, min(result_index, len(photos) - 1),
+        lambda p: p.get("alt", "") + " " + _pexels_slug_text(p.get("url", "")),
+    )
+    if idx is None:
+        log.info("Pexels: no result plausibly matches '%s' — skipping", query[:45])
+        return None
     img_url = photos[idx]["src"]["large2x"]
     img_resp = requests.get(img_url, timeout=TIMEOUT)
     img_resp.raise_for_status()
@@ -79,7 +140,13 @@ def _fetch_pexels_video(query: str, api_key: str, output_path: str, result_index
     videos = resp.json().get("videos", [])
     if not videos:
         return None
-    idx = min(result_index, len(videos) - 1)
+    idx = _best_matching_index(
+        videos, query, min(result_index, len(videos) - 1),
+        lambda v: _pexels_slug_text(v.get("url", "")),
+    )
+    if idx is None:
+        log.info("Pexels video: no result plausibly matches '%s' — skipping", query[:45])
+        return None
     files = [f for f in videos[idx].get("video_files", []) if f.get("file_type") == "video/mp4"]
     if not files:
         return None

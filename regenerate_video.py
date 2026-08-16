@@ -54,6 +54,7 @@ def main():
         voice_rate=rate,
         category=plan.get("category", ""),
         category_color=plan.get("category_color", ""),
+        category_label=plan.get("category_label", ""),
         locale=locale,
     )
     if not meta:

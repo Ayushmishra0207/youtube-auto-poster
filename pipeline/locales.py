@@ -8,7 +8,7 @@ edge-tts voice list and gtts.lang.tts_langs() (2026-07-19), not guessed.
 
 Script families:
   latin       — shared Noto Sans Latin/Cyrillic/Greek font, word-wrap, LTR
-  devanagari  — Noto Sans Devanagari, word-wrap, LTR, needs _fix_devanagari
+  devanagari  — Noto Sans Devanagari, word-wrap, LTR, real shaping via pipeline/text_shaping.py
   bengali     — Noto Sans Bengali, word-wrap, LTR
   arabic      — Noto Sans Arabic, word-wrap (RTL — needs bidi/reshaping)
   hebrew      — Noto Sans Hebrew, word-wrap (RTL — needs bidi/reshaping)

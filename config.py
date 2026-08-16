@@ -72,33 +72,51 @@ HINDI_FONT_REGULAR = str(ASSETS_DIR / "fonts" / "NotoSansDevanagari-Regular.ttf"
 # ─── TTS ───────────────────────────────────────────────────────────────────────
 # Edge TTS (primary) — Microsoft Madhur Neural, deep Hindi male voice
 TTS_VOICE  = os.getenv("TTS_VOICE", "hi-IN-MadhurNeural")
-TTS_RATE   = os.getenv("TTS_RATE",  "-12%")   # deliberate news-anchor pace
+TTS_RATE   = os.getenv("TTS_RATE",  "+0%")    # natural human conversational pace
 TTS_PITCH  = os.getenv("TTS_PITCH", "-4Hz")   # slight depth, stays natural
 # gTTS fallback (used only if Edge TTS fails)
 TTS_LANG   = "hi"
 
 # Faster delivery for time-sensitive content
-NEWS_TTS_RATE   = os.getenv("NEWS_TTS_RATE",   "+15%")  # news-category long videos
-SHORTS_TTS_RATE = os.getenv("SHORTS_TTS_RATE", "+50%")  # YouTube Shorts (1.5x)
+NEWS_TTS_RATE   = os.getenv("NEWS_TTS_RATE",   "+15%")  # news-category long videos — brisk, still natural
+SHORTS_TTS_RATE = os.getenv("SHORTS_TTS_RATE", "+15%")  # YouTube Shorts — brisk, still natural (was 1.5x; script word budget sized to match)
 
 # Long-video categories that get the faster news voice
 NEWS_CATEGORIES = {"news_india", "news_world", "finance"}
+
+# Per-line prosody deltas applied on top of the base rate/pitch above, keyed by
+# the "emotion" tag Claude assigns each section/item (script_generator.py).
+# hi-IN-MadhurNeural has no named "style" list (unlike a few EN/ZH voices), so
+# this is the only real lever for expressive, non-monotone narration: (rate
+# delta in percentage points, pitch delta in Hz).
+EMOTION_PROSODY = {
+    "neutral": (0, 0),
+    "excited": (8, 6),
+    "serious": (-6, -4),
+    "urgent": (10, -2),
+    "curious": (-2, 4),
+    "hopeful": (4, 3),
+    "sad": (-10, -6),
+}
 
 # ─── YouTube Shorts ────────────────────────────────────────────────────────────
 # Adjustable via the dashboard Settings panel — the lever for shifting content
 # mix toward whichever YouTube Partner Program path (standard watch-hours vs
 # Shorts views) is closer to its threshold.
-SHORTS_PER_DAY      = int(os.getenv("SHORTS_PER_DAY", "5"))
+SHORTS_PER_DAY      = int(os.getenv("SHORTS_PER_DAY", "10"))
 SHORTS_WIDTH        = 1080
 SHORTS_HEIGHT       = 1920
 SHORTS_MAX_SECONDS  = 59      # hard YouTube Shorts limit is 60 s
 # Spread across the day's engagement windows for Indian mobile audiences
-# instead of one back-to-back batch: late morning, lunch, pre-evening ramp,
-# evening prime time, and the second night peak. Slots earlier than the
+# instead of one back-to-back batch: morning commute through the second
+# night peak, one distinct slot per short. Slots earlier than the
 # 14:30 IST generation run roll to the next day automatically
 # (_ist_slot_to_utc), which is fine — it just means today's batch fills a
 # rolling ~24h content calendar rather than only "later today."
-SHORTS_UPLOAD_SLOTS = ["11:00", "13:30", "17:30", "19:15", "21:00"]
+SHORTS_UPLOAD_SLOTS = [
+    "08:00", "09:30", "11:00", "12:30", "13:30",
+    "15:30", "17:30", "19:15", "20:30", "21:45",
+]
 
 # ─── Background music ──────────────────────────────────────────────────────────
 BG_MUSIC_DIR    = ASSETS_DIR / "music"
@@ -107,7 +125,9 @@ BG_MUSIC_VOLUME = 0.12    # 12 % of original track volume
 
 # Vibe-matched background music: maps a content category to Jamendo search
 # tags. music_fetcher.py downloads and caches one track per category under
-# BG_MUSIC_DIR/<category>.mp3 the first time it's needed.
+# BG_MUSIC_DIR/<category>.mp3 the first time it's needed. Categories with no
+# tag entry, no local pool, and no Jamendo key still get real background
+# music — music_fetcher falls back to a random track from any pool on disk.
 CATEGORY_MUSIC_TAGS = {
     "news_india":   "news,corporate,tense",
     "news_world":   "news,corporate,tense",
@@ -117,6 +137,21 @@ CATEGORY_MUSIC_TAGS = {
     "entertainment": "upbeat,energetic",
     "movie_explained": "cinematic,dramatic",
     "news":         "news,corporate,tense",   # used by Shorts (breaking news)
+    # Shorts content_type dropdown (pipeline/script_generator.py's _CONTENT_TYPE_TONE) —
+    # same key set, so every content type resolves to a sensible vibe once a
+    # matching pool or Jamendo key exists.
+    "funny":            "comedy,quirky,upbeat",
+    "short_story":      "cinematic,mystery,dramatic",
+    "bollywood":        "bollywood,dance,energetic",
+    "history":          "cinematic,epic,dramatic",
+    "imagination":      "ambient,dreamy,cinematic",
+    "devotional":       "devotional,peaceful,spiritual",
+    "sports":           "sports,energetic,epic",
+    "tech":             "tech,futuristic,electronic",
+    "comedy_skit":      "comedy,quirky,funny",
+    "horror_mystery":   "horror,suspense,dark",
+    "books":            "calm,ambient,literary",
+    "poetry":           "ambient,emotional,piano",
 }
 DEFAULT_MUSIC_TAGS = "cinematic,background"   # fallback vibe for unrecognised categories
 

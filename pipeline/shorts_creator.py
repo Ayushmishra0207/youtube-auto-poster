@@ -3,7 +3,7 @@ YouTube Shorts renderer — vertical 1080×1920, ≤59 s.
 
 One short = fast-paced breaking-news flash: each news item gets a portrait
 background image with Ken Burns motion, a bold Hindi headline overlay, and
-1.5x-speed narration. Items crossfade into each other.
+natural-paced narration. Items crossfade into each other.
 
 Script shape (from script_generator.generate_shorts_script):
   {title, description, tags, items: [{id, headline, narration, image_search}]}
@@ -28,8 +28,8 @@ from pipeline.locales import Locale, category_badge_text, get_locale
 from pipeline.logger import log
 from pipeline.music_fetcher import get_music_for_category
 from pipeline.video_creator import (
-    _XFADE, _KB_OVERSCAN, _cover_crop, _gradient, _ken_burns_clip,
-    _load_font, _shape_text, _shaped_lines, _video_cover_clip, draw_engagement_row,
+    _XFADE, _KB_OVERSCAN, _cover_crop, _draw_text, _gradient, _ken_burns_clip,
+    _load_font, _outro_clip_animated, _shape_text, _shaped_lines, _text_width, _video_cover_clip,
 )
 from pipeline.voice_generator import text_to_speech
 
@@ -51,8 +51,8 @@ def _headline_overlay_rgba(headline: str, size: tuple[int, int], locale: Locale)
 
     y = band_top + 35
     for line in lines:
-        lw = font.getbbox(line)[2]
-        draw.text(((w - lw) // 2, y), line, font=font,
+        lw = _text_width(line, font, locale)
+        _draw_text(overlay, ((w - lw) // 2, y), line, font, locale,
                   fill=(255, 214, 0, 255), stroke_width=3, stroke_fill=(0, 0, 0, 255))
         y += line_h
 
@@ -70,9 +70,9 @@ def _item_frame(headline: str, bg_path: Optional[str], colors: tuple, locale: Lo
         nw, nh = int(img.width * scale + 0.5), int(img.height * scale + 0.5)
         img = img.resize((nw, nh), Image.LANCZOS)
         left, top = (nw - ow) // 2, (nh - oh) // 2
-        bg = img.crop((left, top, left + ow, top + oh))
+        bg = img.crop((left, top, left + ow, top + oh)).convert("RGBA")
     else:
-        bg = Image.fromarray(_gradient(*colors, ow, oh)).convert("RGB")
+        bg = Image.fromarray(_gradient(*colors, ow, oh)).convert("RGBA")
 
     draw = ImageDraw.Draw(bg, "RGBA")
 
@@ -88,12 +88,12 @@ def _item_frame(headline: str, bg_path: Optional[str], colors: tuple, locale: Lo
 
     y = band_top + 35
     for line in lines:
-        w = font.getbbox(line)[2]
-        draw.text(((ow - w) // 2, y), line, font=font,
+        w = _text_width(line, font, locale)
+        _draw_text(bg, ((ow - w) // 2, y), line, font, locale,
                   fill=(255, 214, 0), stroke_width=3, stroke_fill=(0, 0, 0))
         y += line_h
 
-    return np.array(bg)
+    return np.array(bg.convert("RGB"))
 
 
 _PROPER_NOUN_RE = re.compile(r"\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b")
@@ -212,6 +212,7 @@ def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
                 draw = ImageDraw.Draw(canvas)
                 draw.rectangle([(bw - 2, main_h), (bw + 2, H)], fill=RED)
 
+    canvas = canvas.convert("RGBA")
     draw = ImageDraw.Draw(canvas, "RGBA")
 
     # Dark gradient (top badge strip + bottom headline shelf) for legibility
@@ -221,15 +222,15 @@ def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
         top_p = max(0.0, 1 - y / 110) if y < 110 else 0.0
         grad.putpixel((0, y), int(220 * max(bottom_p, top_p * 0.8)))
     alpha = grad.resize((W, H))
-    canvas = Image.composite(Image.new("RGB", (W, H), (0, 0, 0)), canvas, alpha)
+    canvas = Image.composite(Image.new("RGBA", (W, H), (0, 0, 0, 255)), canvas, alpha)
     draw = ImageDraw.Draw(canvas, "RGBA")
 
     # "BREAKING" style badge, top-left
     f_badge = _load_font(locale.font_bold, 40)
     badge_txt = _shape_text(category_badge_text(category, locale), locale)
-    bw_ = f_badge.getbbox(badge_txt)[2]
-    draw.rectangle([(24, 24), (24 + bw_ + 36, 90)], fill=RED)
-    draw.text((42, 34), badge_txt, font=f_badge, fill=(255, 255, 255))
+    bw_ = _text_width(badge_txt, f_badge, locale)
+    draw.rectangle([(24, 24), (24 + int(bw_) + 36, 90)], fill=RED)
+    _draw_text(canvas, (42, 34), badge_txt, f_badge, locale, fill=(255, 255, 255))
 
     # Headline: first item's headline (the actual hook), falling back to title
     items = script.get("items") or []
@@ -247,48 +248,24 @@ def create_short_thumbnail(script: dict, output_path: str, image_paths: list,
 
     line_h = int(f_head.size * 1.35)
     y = H - 56 - line_h * len(lines)
-    draw.rectangle([(0, y - 22), (W, y - 18)], fill=ACCENT)
+    chip_line = len(lines) - 1  # last line gets the solid color-chip treatment
     for i, line in enumerate(lines):
-        color = (255, 255, 255) if i % 2 == 0 else ACCENT
-        lw = f_head.getbbox(line)[2]
-        draw.text(((W - lw) // 2, y), line, font=f_head, fill=color,
-                  stroke_width=5, stroke_fill=(0, 0, 0))
+        lw = int(_text_width(line, f_head, locale))
+        if i == chip_line:
+            x = (W - lw) // 2
+            draw.rectangle([x - 18, y - 10, x + lw + 18, y + f_head.size + 10], fill=(*ACCENT, 255))
+            _draw_text(canvas, (x, y), line, f_head, locale, fill=(20, 20, 20))
+        else:
+            _draw_text(canvas, ((W - lw) // 2, y), line, f_head, locale, fill=(255, 255, 255),
+                      stroke_width=5, stroke_fill=(0, 0, 0))
         y += line_h
 
-    canvas.save(output_path, "JPEG", quality=92, optimize=True)
+    canvas.convert("RGB").save(output_path, "JPEG", quality=92, optimize=True)
     log.info("Short thumbnail saved (composite, %d images) -> %s", len(images), output_path)
     return output_path
 
 
 OUTRO_SECONDS = 2.6  # Shorts are time-tight — keep the engagement CTA brief
-
-
-def _outro_frame(locale: Locale) -> np.ndarray:
-    """Oversized (Ken-Burns-ready) vertical outro frame: LIKE + SUBSCRIBE engagement CTA."""
-    ow = int(SHORTS_WIDTH * _KB_OVERSCAN)
-    oh = int(SHORTS_HEIGHT * _KB_OVERSCAN)
-    bg = Image.fromarray(_gradient("#000428", "#004e92", ow, oh)).convert("RGB")
-    draw = ImageDraw.Draw(bg)
-
-    f1 = _load_font(locale.font_bold, 56)
-    y = int(oh * 0.30)
-    for line in _shaped_lines(locale.subscribe_cta, f1, ow - 100, locale):
-        w = f1.getbbox(line)[2]
-        draw.text(((ow - w) // 2, y), line, font=f1, fill=(255, 68, 68),
-                  stroke_width=2, stroke_fill=(0, 0, 0))
-        y += int(f1.size * 1.35)
-
-    draw_engagement_row(bg, locale, int(oh * 0.52), scale=1.35)
-
-    draw = ImageDraw.Draw(bg)
-    f2 = _load_font(locale.font_regular, 36)
-    y2 = int(oh * 0.66)
-    for line in _shaped_lines(locale.like_share_cta, f2, ow - 100, locale):
-        w = f2.getbbox(line)[2]
-        draw.text(((ow - w) // 2, y2), line, font=f2, fill=(255, 255, 255))
-        y2 += int(f2.size * 1.3)
-
-    return np.array(bg)
 
 
 def create_short(script: dict, work_dir: str, category: str = "news",
@@ -306,12 +283,13 @@ def create_short(script: dict, work_dir: str, category: str = "news",
     if not items:
         raise ValueError("Shorts script has no items")
 
-    # ── Voice (1.5x) + portrait background (video clip, else still image) ────
+    # ── Voice (natural pace) + portrait background (video clip, else still image) ────
     prepared = []
     for i, item in enumerate(items):
         voice_path = str(work / "voices" / f"item_{i:02d}.mp3")
         try:
-            text_to_speech(item["narration"], voice_path, rate=SHORTS_TTS_RATE, locale=locale)
+            text_to_speech(item["narration"], voice_path, rate=SHORTS_TTS_RATE, locale=locale,
+                           emotion=item.get("emotion"))
         except Exception as exc:
             log.warning("Short item %d voice failed, skipping: %s", i + 1, exc)
             continue
@@ -342,13 +320,18 @@ def create_short(script: dict, work_dir: str, category: str = "news",
             if not bg_image:
                 # Pexels has no portrait match for niche/topical Hindi queries far
                 # more often than it does for the broader English search terms
-                # long-form videos use — Pollinations (free, unlimited AI-generated)
-                # is what keeps those reliable, so fall back to it here too instead
-                # of leaving the item with zero background media.
-                from pipeline.image_generator_pollinations import generate_image as pollinations_img
-                bg_image = pollinations_img(query, img_path, width=SHORTS_WIDTH, height=SHORTS_HEIGHT)
+                # long-form videos use. Try Gemini Imagen first for a higher-quality
+                # AI-generated stand-in; Pollinations (free, unlimited) is the final
+                # safety net once Gemini's quota is exhausted for the run.
+                from pipeline.image_generator_gemini import generate_image as gemini_img
+                bg_image = gemini_img(query, img_path, aspect_ratio="9:16")
                 if bg_image:
-                    log.info("Short item %d [pollinations] %s", i + 1, query[:45])
+                    log.info("Short item %d [gemini] %s", i + 1, query[:45])
+                else:
+                    from pipeline.image_generator_pollinations import generate_image as pollinations_img
+                    bg_image = pollinations_img(query, img_path, width=SHORTS_WIDTH, height=SHORTS_HEIGHT)
+                    if bg_image:
+                        log.info("Short item %d [pollinations] %s", i + 1, query[:45])
 
         prepared.append({"item": item, "voice": voice_path, "video": bg_video, "image": bg_image})
 
@@ -393,9 +376,13 @@ def create_short(script: dict, work_dir: str, category: str = "news",
     final = (clips[0] if len(clips) == 1
              else mpe.concatenate_videoclips(clips, method="compose", padding=-_XFADE))
 
-    # ── Outro: LIKE + SUBSCRIBE engagement card ───────────────────────────────
-    outro_clip = _ken_burns_clip(_outro_frame(locale), OUTRO_SECONDS, move_index=0,
-                                 out_size=(SHORTS_WIDTH, SHORTS_HEIGHT))
+    # ── Outro: LIKE + SUBSCRIBE engagement card (animated) ────────────────────
+    outro_clip = _outro_clip_animated(
+        locale, OUTRO_SECONDS, (SHORTS_WIDTH, SHORTS_HEIGHT),
+        title_font_size=56, body_font_size=36, row_scale=1.35,
+        title_y=int(SHORTS_HEIGHT * 0.30), row_cy=int(SHORTS_HEIGHT * 0.52),
+        body_y=int(SHORTS_HEIGHT * 0.66),
+    )
     outro_clip = outro_clip.with_effects([mpe.vfx.CrossFadeIn(_XFADE)])
     final = mpe.concatenate_videoclips([final, outro_clip], method="compose", padding=-_XFADE)
 

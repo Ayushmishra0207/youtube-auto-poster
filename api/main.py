@@ -759,10 +759,14 @@ async def upload_generated_video(date: str, index: int):
     description = ""
     tags: list[str] = []
     category_id = "25"
+    category_key = ""
+    category_label = ""
+    script_data: dict = {}
 
     if script_path.exists():
         try:
             s = json.loads(script_path.read_text(encoding="utf-8"))
+            script_data = s
             title       = s.get("title", title)[:100]
             description = s.get("description", "")[:5000]
             tags        = [str(t)[:500] for t in s.get("tags", [])[:500]]
@@ -772,10 +776,9 @@ async def upload_generated_video(date: str, index: int):
             # category entirely, which is why manually-uploaded videos kept
             # landing in the wrong YouTube category regardless of topic.
             category_key = s.get("_category", "")
-            category_id = (
-                _load_topic_config().get("categories", {}).get(category_key, {}).get("yt_category_id")
-                or "25"
-            )
+            category_info = _load_topic_config().get("categories", {}).get(category_key, {})
+            category_id = category_info.get("yt_category_id") or "25"
+            category_label = category_info.get("label", category_key)
         except Exception:
             pass
 
@@ -822,6 +825,24 @@ async def upload_generated_video(date: str, index: int):
                 ).execute()
             except Exception:
                 pass  # thumbnail upload non-critical
+
+        # Playlist (session watch-time lever) + captions (real timed track,
+        # beats YouTube's own ASR for TTS-narrated content) — same treatment
+        # the daily scheduled pipeline gives every long-form upload.
+        from pipeline.uploader import add_video_to_playlist, upload_captions
+        from pipeline.video_creator import build_captions_srt
+        try:
+            add_video_to_playlist(video_id, category_key, category_label)
+        except Exception:
+            pass
+        try:
+            sections = script_data.get("sections", [])
+            voice_paths = [str(vdir / "voices" / f"voice_{s.get('id', i):02d}.mp3")
+                          for i, s in enumerate(sections)]
+            srt_text = build_captions_srt(script_data, voice_paths)
+            upload_captions(video_id, srt_text, language=script_data.get("_locale", "hi"))
+        except Exception:
+            pass
 
         return {
             "ok": True,

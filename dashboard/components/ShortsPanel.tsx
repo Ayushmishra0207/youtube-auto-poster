@@ -33,16 +33,21 @@ const CONTENT_TYPES: Record<string, ContentType> = {
   poetry:         { label: "Poetry",         emoji: "🪶", color: "#f0abfc" },
 };
 
+const CONTENT_TYPE_GRID_WIDTH = 380;
+
 function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (key: string) => void }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 200 });
+  const [pos, setPos] = useState({ top: 0, left: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
   const current = CONTENT_TYPES[value] ?? CONTENT_TYPES.news;
 
   const handleOpen = () => {
     if (btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 200) });
+      // Keep the (wider, 2-column) panel on-screen even when the button
+      // sits near the right edge, instead of letting it overflow the viewport.
+      const left = Math.min(r.left, window.innerWidth - CONTENT_TYPE_GRID_WIDTH - 16);
+      setPos({ top: r.bottom + 4, left: Math.max(8, left) });
     }
     setOpen((o) => !o);
   };
@@ -72,14 +77,21 @@ function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (ke
               position: "fixed",
               top: pos.top,
               left: pos.left,
-              width: pos.width,
-              maxHeight: "50vh",
+              width: CONTENT_TYPE_GRID_WIDTH,
+              // All 16 content types fit in this 2-column grid at once — no
+              // scrolling needed on any normal screen. maxHeight/overflow
+              // stay only as a safety net for very short viewports.
+              maxHeight: "80vh",
               overflowY: "auto",
               zIndex: 9999,
               background: "#080c18",
               border: "1px solid rgba(79,195,247,0.25)",
               borderRadius: "12px",
               boxShadow: "0 20px 60px rgba(0,0,0,0.9)",
+              padding: "8px",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "4px",
             }}
           >
             {Object.entries(CONTENT_TYPES).map(([key, ct]) => (
@@ -90,10 +102,11 @@ function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (ke
                   width: "100%",
                   display: "flex",
                   alignItems: "center",
-                  gap: "10px",
-                  padding: "8px 12px",
+                  gap: "8px",
+                  padding: "8px 10px",
                   fontSize: "13px",
                   textAlign: "left",
+                  borderRadius: "8px",
                   background: key === value ? "rgba(255,255,255,0.05)" : "transparent",
                   border: "none",
                   cursor: "pointer",
@@ -103,8 +116,8 @@ function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (ke
                 onMouseLeave={(e) => (e.currentTarget.style.background = key === value ? "rgba(255,255,255,0.05)" : "transparent")}
               >
                 <span>{ct.emoji}</span>
-                <span style={{ flex: 1 }}>{ct.label}</span>
-                {key === value && <Check size={12} style={{ color: ct.color }} />}
+                <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ct.label}</span>
+                {key === value && <Check size={12} style={{ flexShrink: 0, color: ct.color }} />}
               </button>
             ))}
           </div>

@@ -14,6 +14,7 @@ progress tracking), and again after youtube.force-ssl was added (for
 auto-posting engagement comments) — delete youtube_token.pickle and re-run
 setup_auth.py once to re-consent with the new scope.
 """
+import json
 import os
 import pickle
 from datetime import datetime, timezone
@@ -22,9 +23,10 @@ from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaInMemoryUpload
 
 from config import (
+    BASE_DIR,
     YOUTUBE_CLIENT_SECRETS,
     YOUTUBE_TOKEN_FILE,
     YT_CATEGORY_ID,
@@ -33,6 +35,8 @@ from config import (
 )
 from pipeline.logger import log
 from pipeline.text_utils import safe_truncate
+
+PLAYLIST_CACHE_FILE = BASE_DIR / "youtube_playlists.json"  # {category_key: playlist_id}
 
 # youtube scope is a superset of youtube.upload and also allows thumbnail management.
 # yt-analytics.readonly enables watch-hours/Shorts-views queries for monetization tracking.
@@ -193,4 +197,106 @@ def upload_thumbnail(video_id: str, thumbnail_path: str) -> bool:
         return False
     except Exception as e:
         log.error("Thumbnail upload failed for %s: %s", video_id, e)
+        return False
+
+
+# ─── Playlists ────────────────────────────────────────────────────────────────
+# Grouping same-category videos into a playlist is one of the most effective
+# levers for session watch time — YouTube's autoplay/suggested strongly favors
+# "watch next in this playlist" once a viewer is in one, which is exactly what
+# a channel with a near-zero organic-discovery rate on individual long-form
+# videos needs. One playlist per topic_config.json category, created lazily
+# and cached locally so repeated uploads reuse the same playlist.
+
+def _load_playlist_cache() -> dict:
+    if PLAYLIST_CACHE_FILE.exists():
+        try:
+            return json.loads(PLAYLIST_CACHE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_playlist_cache(cache: dict) -> None:
+    PLAYLIST_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _get_or_create_playlist(category: str, label: str) -> str | None:
+    """Return the cached playlist ID for `category`, creating it on first use."""
+    if not category:
+        return None
+    cache = _load_playlist_cache()
+    if category in cache:
+        return cache[category]
+
+    try:
+        svc = _get_service()
+        resp = svc.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {
+                    "title": label or category,
+                    "description": f"Auto-generated {label or category} videos from this channel.",
+                },
+                "status": {"privacyStatus": "public"},
+            },
+        ).execute()
+        playlist_id = resp["id"]
+        cache[category] = playlist_id
+        _save_playlist_cache(cache)
+        log.info("Created playlist '%s' (%s) for category '%s'", label, playlist_id, category)
+        return playlist_id
+    except Exception as exc:
+        log.warning("Could not create/find playlist for category '%s': %s", category, exc)
+        return None
+
+
+def add_video_to_playlist(video_id: str, category: str, label: str = "") -> bool:
+    """Add video_id to its category's playlist (creating the playlist on first use)."""
+    playlist_id = _get_or_create_playlist(category, label)
+    if not playlist_id:
+        return False
+    try:
+        svc = _get_service()
+        svc.playlistItems().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }
+            },
+        ).execute()
+        log.info("Added video %s to playlist %s (%s)", video_id, playlist_id, label or category)
+        return True
+    except Exception as exc:
+        log.warning("Could not add video %s to playlist '%s': %s", video_id, category, exc)
+        return False
+
+
+# ─── Captions ─────────────────────────────────────────────────────────────────
+# End screens/cards have no public Data API v3 endpoint at all (Studio-only,
+# no workaround exists), but timed captions do — captions().insert — and are
+# unused here despite the exact timing data already existing (see
+# pipeline.video_creator.build_captions_srt, which reuses the same per-section
+# timeline as build_chapters). Real captions beat YouTube's own auto-generated
+# ASR for TTS-narrated content and make the video's own words indexable for
+# search — both a distribution and an accessibility win.
+
+def upload_captions(video_id: str, srt_text: str, language: str = "hi") -> bool:
+    """Upload a timed caption track (SRT) for video_id. No-op if srt_text is empty."""
+    if not srt_text.strip():
+        return False
+    try:
+        svc = _get_service()
+        media = MediaInMemoryUpload(srt_text.encode("utf-8"), mimetype="application/octet-stream")
+        svc.captions().insert(
+            part="snippet",
+            body={"snippet": {"videoId": video_id, "language": language, "name": "", "isDraft": False}},
+            media_body=media,
+        ).execute()
+        log.info("Captions uploaded for video %s", video_id)
+        return True
+    except Exception as exc:
+        log.warning("Caption upload failed for video %s: %s", video_id, exc)
         return False

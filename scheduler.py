@@ -47,9 +47,10 @@ from pipeline.logger import log
 from pipeline.script_generator import generate_script
 from pipeline.shorts_creator import create_short
 from pipeline.text_utils import safe_truncate
-from pipeline.trends import get_trending_topics
-from pipeline.uploader import upload_thumbnail, upload_video
-from pipeline.video_creator import VIDEO_CLIP_EXTS, build_chapters, create_thumbnail, create_video
+from pipeline.topic_history import filter_fresh, is_duplicate, record_topic
+from pipeline.trends import get_trending_topics, get_youtube_trending_topics
+from pipeline.uploader import add_video_to_playlist, upload_captions, upload_thumbnail, upload_video
+from pipeline.video_creator import VIDEO_CLIP_EXTS, build_captions_srt, build_chapters, create_thumbnail, create_video
 from pipeline.voice_generator import generate_section_voices
 
 TOPIC_CONFIG_FILE = BASE_DIR / "topic_config.json"
@@ -213,6 +214,7 @@ def _load_slot_plan() -> list[dict]:
             "slot":            slot_str,
             "topic":           topic,
             "category":        cat_key,
+            "category_label":  cat_info.get("label", cat_key),
             "category_color":  cat_info.get("color", ""),
             "search_query":    cat_info.get("search_query", ""),
             "category_style":  cat_info.get("prompt_style", ""),
@@ -229,34 +231,76 @@ def _load_slot_plan() -> list[dict]:
         for p in needs_fetch:
             by_query[(p["search_query"] or "general", p["locale"].code)].append(p)
 
+        # Different categories can share a yt_category_id (e.g. news_india and
+        # news_world both use "25") or just happen to surface the same top
+        # trending item — without this, they'd get assigned the literal same
+        # topic. Tracks every topic assigned so far THIS run (case-insensitive),
+        # across all groups, so no two slots in the same day's plan collide.
+        assigned_topics: set[str] = set()
+
         for (query, locale_code), slots_needing in by_query.items():
             n = len(slots_needing)
             locale = slots_needing[0]["locale"]
-            fetched: list[str] = []
+            yt_category_id = slots_needing[0]["yt_category_id"]
+            candidates: list[str] = []
+
+            # 1. Real YouTube trending videos in this category — a stronger
+            #    signal than Google Trends for what YouTube's own algorithm
+            #    is actually pushing right now in this vertical. Not every
+            #    category has trending-chart data for every region, so an
+            #    empty result here is normal, not an error.
+            try:
+                yt_trending = get_youtube_trending_topics(num=n * 3, locale=locale,
+                                                           video_category_id=yt_category_id)
+                candidates.extend(filter_fresh(yt_trending, namespace="longform"))
+            except Exception as e:
+                log.warning("YouTube trending fetch failed for category id '%s': %s", yt_category_id, e)
+
+            # 2. Google Trends, keyword-matched to the category's search_query,
+            #    to top up the candidate pool.
             if query and query != "general":
                 try:
                     from pytrends.request import TrendReq
                     pt = TrendReq(hl=locale.news_hl, tz=330, timeout=(10, 30))
                     df = pt.trending_searches(pn=locale.trends_pn)
                     all_trends = [str(t).strip() for t in df[0].dropna().tolist() if t]
-                    # Try to find trends that match the query keywords
                     keywords = query.lower().split()
                     matched = [t for t in all_trends if any(k in t.lower() for k in keywords)]
-                    fetched = (matched or all_trends)[:n]
+                    candidates.extend(filter_fresh(matched or all_trends, namespace="longform"))
                 except Exception as e:
                     log.warning("Trends fetch failed for query '%s' (locale=%s): %s", query, locale_code, e)
+
+            # Assign candidates to this group's slots, skipping anything
+            # already claimed by another slot this run (within-group or across
+            # groups) — de-duplicated case-insensitively.
+            fetched: list[str] = []
+            for c in candidates:
+                if len(fetched) >= n:
+                    break
+                key = c.strip().lower()
+                if key and key not in assigned_topics and c not in fetched:
+                    fetched.append(c)
 
             for j, p in enumerate(slots_needing):
                 if j < len(fetched):
                     p["topic"] = fetched[j]
                 else:
-                    fallbacks = p["fallback_topics"]
+                    # 3. Category's fallback list, preferring an entry not
+                    #    covered in the last 72h and not already claimed this
+                    #    run (falls back to the full list if every entry is
+                    #    unusable, rather than leaving the slot without a topic).
+                    fresh_fallbacks = [
+                        f for f in p["fallback_topics"]
+                        if not is_duplicate(f, namespace="longform") and f.strip().lower() not in assigned_topics
+                    ]
+                    fallbacks = fresh_fallbacks or p["fallback_topics"]
                     if fallbacks:
                         p["topic"] = _random.choice(fallbacks)
                     else:
-                        # final fallback: general trending for this slot's locale
+                        # 4. final fallback: general trending for this slot's locale
                         general = get_trending_topics(1, locale=p["locale"])
                         p["topic"] = general[0] if general else f"{p['locale'].label} news today"
+                assigned_topics.add(p["topic"].strip().lower())
 
     return plan
 
@@ -271,7 +315,7 @@ def _append_chapters_to_description(script: dict, voices: list) -> dict:
 
 def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
                       category_style: str = "", voice_rate: str | None = None,
-                      category: str = "", category_color: str = "",
+                      category: str = "", category_color: str = "", category_label: str = "",
                       locale: Locale | None = None) -> dict | None:
     """Full pipeline for one trending topic. Returns video metadata or None."""
     locale = locale or get_locale(None)
@@ -285,6 +329,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         log.info("[%d] Generating script...", index)
         script = generate_script(topic, category_style=category_style, locale=locale)
         log.info("[%d] Title: %s", index, script["title"])
+        record_topic(script["title"], namespace="longform")
 
         # 2. Voice
         log.info("[%d] Generating voice-over...", index)
@@ -295,6 +340,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             locale=locale,
         )
         script = _append_chapters_to_description(script, voices)
+        captions_srt = build_captions_srt(script, voices)
 
         # 3. Images
         log.info("[%d] Fetching background images...", index)
@@ -339,6 +385,9 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             "tags":           script.get("tags", []),
             "slot":           slot_str,
             "yt_language":    locale.yt_language,
+            "category":       category,
+            "category_label": category_label,
+            "captions_srt":   captions_srt,
         }
 
     except Exception as exc:
@@ -380,6 +429,7 @@ def run_pipeline():
             voice_rate=rate,
             category=plan.get("category", ""),
             category_color=plan.get("category_color", ""),
+            category_label=plan.get("category_label", ""),
             locale=plan.get("locale"),
         )
         if meta:
@@ -406,6 +456,8 @@ def run_pipeline():
                 yt_language=v.get("yt_language", "hi"),
             )
             upload_thumbnail(vid_id, v["thumbnail_path"])
+            add_video_to_playlist(vid_id, v.get("category", ""), v.get("category_label", ""))
+            upload_captions(vid_id, v.get("captions_srt", ""), language=v.get("yt_language", "hi"))
         except Exception as e:
             log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
 
@@ -437,7 +489,7 @@ _SHORTS_PLAN = [
 
 
 def _run_shorts(base_dir: Path):
-    """Generate and upload the daily YouTube Shorts (breaking news, 1.5x voice)."""
+    """Generate and upload the daily YouTube Shorts (breaking news, natural-paced voice)."""
     log.info("-" * 60)
     log.info("Generating %d YouTube Shorts...", SHORTS_PER_DAY)
 
@@ -460,7 +512,7 @@ def _run_shorts(base_dir: Path):
             with open(work_dir / "script.json", "w", encoding="utf-8") as _f:
                 _json.dump(script, _f, ensure_ascii=False, indent=2)
 
-            # 3. Render vertical short (voice at 1.5x inside)
+            # 3. Render vertical short (natural-paced voice inside)
             video_path = create_short(script, str(work_dir), category="news", locale=locale)
 
             # 4. Upload with a scheduled publish slot
