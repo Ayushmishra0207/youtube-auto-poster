@@ -159,6 +159,58 @@ def _cleanup_old_output():
 
 # ___ Step helpers _____________________________________________________________
 
+def _pick_topic_for_category(cat_info: dict, locale: Locale, assigned_topics: set,
+                             topic_history_base_dir: Path | None = None) -> str:
+    """
+    One fresh topic for a single category: real YouTube trending videos in
+    that category first, then Google Trends keyword-matched to
+    search_query, then the category's fallback_topics, then a generic
+    trending topic — skipping anything in `assigned_topics` (case-
+    insensitive) or already covered per topic_history within the given
+    base_dir (None = the shared/default history file).
+    """
+    yt_category_id = cat_info.get("yt_category_id", "25")
+    query = cat_info.get("search_query", "")
+    fallback_topics = cat_info.get("fallback_topics", [])
+    candidates: list[str] = []
+
+    try:
+        yt_trending = get_youtube_trending_topics(num=6, locale=locale, video_category_id=yt_category_id)
+        candidates.extend(filter_fresh(yt_trending, namespace="longform", base_dir=topic_history_base_dir))
+    except Exception as e:
+        log.warning("YouTube trending fetch failed for category id '%s': %s", yt_category_id, e)
+
+    if query and query != "general":
+        try:
+            from pytrends.request import TrendReq
+            pt = TrendReq(hl=locale.news_hl, tz=330, timeout=(10, 30))
+            df = pt.trending_searches(pn=locale.trends_pn)
+            all_trends = [str(t).strip() for t in df[0].dropna().tolist() if t]
+            keywords = query.lower().split()
+            matched = [t for t in all_trends if any(k in t.lower() for k in keywords)]
+            candidates.extend(filter_fresh(matched or all_trends, namespace="longform", base_dir=topic_history_base_dir))
+        except Exception as e:
+            log.warning("Trends fetch failed for query '%s': %s", query, e)
+
+    for c in candidates:
+        key = c.strip().lower()
+        if key and key not in assigned_topics:
+            return c
+
+    fresh_fallbacks = [
+        f for f in fallback_topics
+        if not is_duplicate(f, namespace="longform", base_dir=topic_history_base_dir)
+        and f.strip().lower() not in assigned_topics
+    ]
+    import random as _random
+    chosen = fresh_fallbacks or fallback_topics
+    if chosen:
+        return _random.choice(chosen)
+
+    general = get_trending_topics(1, locale=locale)
+    return general[0] if general else f"{locale.label} news today"
+
+
 def _load_slot_plan() -> list[dict]:
     """
     Build the per-slot plan from topic_config.json + topics_override.json.
@@ -171,8 +223,6 @@ def _load_slot_plan() -> list[dict]:
 
     Returns a list of dicts: [{slot, topic, category, category_style, yt_category_id}, ...]
     """
-    import random as _random
-
     categories = {}
     slot_categories = []
 
@@ -239,67 +289,11 @@ def _load_slot_plan() -> list[dict]:
         assigned_topics: set[str] = set()
 
         for (query, locale_code), slots_needing in by_query.items():
-            n = len(slots_needing)
-            locale = slots_needing[0]["locale"]
-            yt_category_id = slots_needing[0]["yt_category_id"]
-            candidates: list[str] = []
-
-            # 1. Real YouTube trending videos in this category — a stronger
-            #    signal than Google Trends for what YouTube's own algorithm
-            #    is actually pushing right now in this vertical. Not every
-            #    category has trending-chart data for every region, so an
-            #    empty result here is normal, not an error.
-            try:
-                yt_trending = get_youtube_trending_topics(num=n * 3, locale=locale,
-                                                           video_category_id=yt_category_id)
-                candidates.extend(filter_fresh(yt_trending, namespace="longform"))
-            except Exception as e:
-                log.warning("YouTube trending fetch failed for category id '%s': %s", yt_category_id, e)
-
-            # 2. Google Trends, keyword-matched to the category's search_query,
-            #    to top up the candidate pool.
-            if query and query != "general":
-                try:
-                    from pytrends.request import TrendReq
-                    pt = TrendReq(hl=locale.news_hl, tz=330, timeout=(10, 30))
-                    df = pt.trending_searches(pn=locale.trends_pn)
-                    all_trends = [str(t).strip() for t in df[0].dropna().tolist() if t]
-                    keywords = query.lower().split()
-                    matched = [t for t in all_trends if any(k in t.lower() for k in keywords)]
-                    candidates.extend(filter_fresh(matched or all_trends, namespace="longform"))
-                except Exception as e:
-                    log.warning("Trends fetch failed for query '%s' (locale=%s): %s", query, locale_code, e)
-
-            # Assign candidates to this group's slots, skipping anything
-            # already claimed by another slot this run (within-group or across
-            # groups) — de-duplicated case-insensitively.
-            fetched: list[str] = []
-            for c in candidates:
-                if len(fetched) >= n:
-                    break
-                key = c.strip().lower()
-                if key and key not in assigned_topics and c not in fetched:
-                    fetched.append(c)
-
-            for j, p in enumerate(slots_needing):
-                if j < len(fetched):
-                    p["topic"] = fetched[j]
-                else:
-                    # 3. Category's fallback list, preferring an entry not
-                    #    covered in the last 72h and not already claimed this
-                    #    run (falls back to the full list if every entry is
-                    #    unusable, rather than leaving the slot without a topic).
-                    fresh_fallbacks = [
-                        f for f in p["fallback_topics"]
-                        if not is_duplicate(f, namespace="longform") and f.strip().lower() not in assigned_topics
-                    ]
-                    fallbacks = fresh_fallbacks or p["fallback_topics"]
-                    if fallbacks:
-                        p["topic"] = _random.choice(fallbacks)
-                    else:
-                        # 4. final fallback: general trending for this slot's locale
-                        general = get_trending_topics(1, locale=p["locale"])
-                        p["topic"] = general[0] if general else f"{p['locale'].label} news today"
+            for p in slots_needing:
+                p["topic"] = _pick_topic_for_category(
+                    {"yt_category_id": p["yt_category_id"], "search_query": p["search_query"], "fallback_topics": p["fallback_topics"]},
+                    p["locale"], assigned_topics,
+                )
                 assigned_topics.add(p["topic"].strip().lower())
 
     return plan
