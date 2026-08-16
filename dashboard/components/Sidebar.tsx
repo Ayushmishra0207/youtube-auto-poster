@@ -4,10 +4,11 @@ import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, ListTodo, Film, ScrollText,
   CalendarClock, Settings, Zap, BarChart2, PlaySquare,
-  Upload, Target, X, Sparkles, Instagram,
+  Upload, Target, X, Sparkles, Instagram, ChevronDown, Check,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 
 const DEADLINE = new Date("2026-05-19T00:00:00+05:30"); // IST
 const TOTAL_DAYS = 30;
@@ -95,6 +96,35 @@ function MonetizationFooter() {
         <p className="text-[10px]" style={{ color: "var(--muted)" }}>Need: 1,000 subs · 4,000 watch hrs</p>
         <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 14:30 IST · Upload 18:30–19:30</p>
       </div>
+    </div>
+  );
+}
+
+function AccountSwitcher() {
+  const { accountId, setAccountId, accounts } = useAccount();
+  const [open, setOpen] = useState(false);
+  const current = accounts.find((a) => a.id === accountId);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium">
+        <span>{current?.label || accountId}</span>
+        <ChevronDown size={12} className={open ? "rotate-180" : ""} />
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 50, background: "#080c18", border: "1px solid rgba(79,195,247,0.25)", borderRadius: 8, minWidth: 180 }}>
+          {accounts.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => { setAccountId(a.id); setOpen(false); }}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", fontSize: 13, textAlign: "left", color: a.id === accountId ? "#4FC3F7" : "#e2e8f0" }}
+            >
+              <span style={{ flex: 1 }}>{a.label}</span>
+              {a.id === accountId && <Check size={12} />}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -195,6 +225,11 @@ export default function Sidebar({
             {runMsg.text}
           </p>
         )}
+      </div>
+
+      {/* Account switcher */}
+      <div className="px-4 pb-2">
+        <AccountSwitcher />
       </div>
 
       {/* Nav */}
