@@ -50,12 +50,12 @@ def _fingerprint(text: str) -> tuple:
     return entities, general
 
 
-def _history_path(namespace: str) -> Path:
-    return BASE_DIR / f"{namespace}_topic_history.json"
+def _history_path(namespace: str = "shorts", base_dir: Path | None = None) -> Path:
+    return (base_dir or BASE_DIR) / f"{namespace}_topic_history.json"
 
 
-def _load(namespace: str = "shorts") -> list:
-    path = _history_path(namespace)
+def _load(namespace: str = "shorts", base_dir: Path | None = None) -> list:
+    path = _history_path(namespace, base_dir)
     if not path.exists():
         return []
     try:
@@ -73,13 +73,13 @@ def _load(namespace: str = "shorts") -> list:
     return fresh
 
 
-def _save(entries: list, namespace: str = "shorts") -> None:
-    _history_path(namespace).write_text(
+def _save(entries: list, namespace: str = "shorts", base_dir: Path | None = None) -> None:
+    _history_path(namespace, base_dir).write_text(
         json.dumps(entries[-MAX_HISTORY_ENTRIES:], ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
-def record_topic(title: str, namespace: str = "shorts") -> None:
+def record_topic(title: str, namespace: str = "shorts", base_dir: Path | None = None) -> None:
     """
     Call after a script is successfully generated, so future generations avoid
     repeating it. namespace picks which history file to use — "shorts"
@@ -89,23 +89,23 @@ def record_topic(title: str, namespace: str = "shorts") -> None:
     if not title:
         return
     entities, general = _fingerprint(title)
-    entries = _load(namespace)
+    entries = _load(namespace, base_dir)
     entries.append({
         "title": title,
         "entities": sorted(entities),
         "fingerprint": sorted(general),
         "used_at": datetime.now(timezone.utc).isoformat(),
     })
-    _save(entries, namespace)
+    _save(entries, namespace, base_dir)
 
 
-def recent_titles(limit: int = 15, namespace: str = "shorts") -> list:
+def recent_titles(limit: int = 15, namespace: str = "shorts", base_dir: Path | None = None) -> list:
     """Most recently used titles, for steering the LLM away from repeats."""
-    return [e["title"] for e in _load(namespace)[-limit:]]
+    return [e["title"] for e in _load(namespace, base_dir)[-limit:]]
 
 
 def is_duplicate(headline: str, threshold: float = _DUPLICATE_OVERLAP_THRESHOLD,
-                 namespace: str = "shorts") -> bool:
+                 namespace: str = "shorts", base_dir: Path | None = None) -> bool:
     """
     True if headline matches a recent topic: either they share a distinctive
     Latin-script entity token (a brand/person/place name, e.g. "hdfc" —
@@ -116,7 +116,7 @@ def is_duplicate(headline: str, threshold: float = _DUPLICATE_OVERLAP_THRESHOLD,
     entities, fp = _fingerprint(headline)
     if not entities and not fp:
         return False
-    for e in _load(namespace):
+    for e in _load(namespace, base_dir):
         used_entities = set(e.get("entities", []))
         if entities and used_entities and (entities & used_entities):
             return True
@@ -129,6 +129,6 @@ def is_duplicate(headline: str, threshold: float = _DUPLICATE_OVERLAP_THRESHOLD,
     return False
 
 
-def filter_fresh(headlines: list, namespace: str = "shorts") -> list:
+def filter_fresh(headlines: list, namespace: str = "shorts", base_dir: Path | None = None) -> list:
     """Drop headlines that duplicate something covered recently."""
-    return [h for h in headlines if not is_duplicate(h, namespace=namespace)]
+    return [h for h in headlines if not is_duplicate(h, namespace=namespace, base_dir=base_dir)]
