@@ -53,11 +53,38 @@ SCOPES = [
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
-def _get_service(token_file: str | None = None):
-    token_path = token_file or YOUTUBE_TOKEN_FILE
+def _get_service(token_file: str | None = None, allow_browser_flow: bool = False):
+    """
+    Build a YouTube service for `token_file` (an Account.token_file value —
+    a bare filename resolved against BASE_DIR, exactly like
+    Account.token_path and api/main.py's _get_youtube_credentials), or for
+    the single default-account token when none is given.
+
+    An explicitly-named account token that isn't on disk (or can't be
+    refreshed) raises instead of silently dropping into the interactive
+    browser OAuth flow: run_local_server() waits forever for a callback in a
+    headless, unattended context — e.g. the 2:30 AM scheduled run, which
+    would sit there holding pipeline.lock. Interactive onboarding is an
+    explicit act, so only the no-token_file default path (and
+    setup_auth.py, which opts in with allow_browser_flow=True) may open a
+    browser.
+    """
+    if token_file:
+        token_path = Path(token_file)
+        if not token_path.is_absolute():
+            token_path = BASE_DIR / token_path
+        if not token_path.exists() and not allow_browser_flow:
+            raise FileNotFoundError(
+                f"YouTube token not found for this account: {token_path}. "
+                f"Run `python setup_auth.py --account <id> --label <name>` to authorize it."
+            )
+    else:
+        token_path = Path(YOUTUBE_TOKEN_FILE)
+        allow_browser_flow = True  # default token: interactive setup is expected
+
     creds = None
 
-    if os.path.exists(token_path):
+    if token_path.exists():
         with open(token_path, "rb") as f:
             creds = pickle.load(f)
 
@@ -66,6 +93,12 @@ def _get_service(token_file: str | None = None):
             log.info("Refreshing YouTube OAuth token...")
             creds.refresh(Request())
         else:
+            if not allow_browser_flow:
+                raise RuntimeError(
+                    f"Saved YouTube token {token_path.name} is missing or unusable and cannot be "
+                    f"refreshed without user interaction. Re-run `python setup_auth.py --account <id> "
+                    f"--label <name>` to re-authorize it."
+                )
             if not os.path.exists(YOUTUBE_CLIENT_SECRETS):
                 raise FileNotFoundError(
                     "client_secrets.json not found.\n"
@@ -90,13 +123,23 @@ def upload_video(
     title: str,
     description: str,
     tags: list,
-    publish_at_utc: datetime,
+    publish_at_utc: datetime | None,
     category_id: str = YT_CATEGORY_ID,
     yt_language: str = YT_DEFAULT_LANGUAGE,
     token_file: str | None = None,
 ) -> str:
     """
-    Upload video_path to YouTube and schedule it for publish_at_utc.
+    Upload video_path to YouTube.
+
+    publish_at_utc is the scheduled go-live time: the video is uploaded
+    `private` with that `publishAt` stamp, which is what the daily pipeline
+    wants (upload now, surface at the slot time). Pass None instead for
+    "publish immediately" — the video goes up `public` with no publishAt at
+    all. Passing "now" is NOT the same thing and must not be used: a
+    resumable upload of a full-length video can easily outlast the
+    timestamp, leaving a private video with a lapsed schedule that never
+    fires.
+
     yt_language sets both defaultLanguage and defaultAudioLanguage — pass
     locale.yt_language (pipeline/locales.py) for non-Hindi content.
 
@@ -104,9 +147,21 @@ def upload_video(
     """
     svc = _get_service(token_file)
 
-    if publish_at_utc.tzinfo is None:
-        publish_at_utc = publish_at_utc.replace(tzinfo=timezone.utc)
-    publish_str = publish_at_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    if publish_at_utc is None:
+        publish_str = ""
+        status = {
+            "privacyStatus":           "public",
+            "selfDeclaredMadeForKids": YT_MADE_FOR_KIDS,
+        }
+    else:
+        if publish_at_utc.tzinfo is None:
+            publish_at_utc = publish_at_utc.replace(tzinfo=timezone.utc)
+        publish_str = publish_at_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        status = {
+            "privacyStatus":           "private",
+            "publishAt":               publish_str,
+            "selfDeclaredMadeForKids": YT_MADE_FOR_KIDS,
+        }
 
     body = {
         "snippet": {
@@ -117,11 +172,7 @@ def upload_video(
             "defaultLanguage":      yt_language,
             "defaultAudioLanguage": yt_language,
         },
-        "status": {
-            "privacyStatus":            "private",
-            "publishAt":                publish_str,
-            "selfDeclaredMadeForKids":  YT_MADE_FOR_KIDS,
-        },
+        "status": status,
     }
 
     media = MediaFileUpload(
@@ -139,7 +190,8 @@ def upload_video(
             log.info("Upload progress: %d%%", pct)
 
     vid_id = response["id"]
-    log.info("Uploaded → https://youtube.com/watch?v=%s  (scheduled: %s)", vid_id, publish_str)
+    log.info("Uploaded → https://youtube.com/watch?v=%s  (%s)", vid_id,
+             f"scheduled: {publish_str}" if publish_str else "published immediately")
     return vid_id
 
 

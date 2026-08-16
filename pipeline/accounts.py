@@ -4,6 +4,7 @@ its own OAuth token, topic/Shorts config, and output/state directory —
 see docs/superpowers/specs/2026-08-16-multi-account-support-design.md.
 """
 import json
+import re
 import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -144,7 +145,22 @@ def set_account_enabled(account_id: str, enabled: bool) -> None:
     save_accounts(accounts)
 
 
+# Account ids become directory names (accounts/<id>/, output/<id>/), so they
+# have to be filesystem-safe slugs — this also keeps a CLI caller
+# (setup_auth.py --account) from walking out of BASE_DIR with "../..".
+_ACCOUNT_ID_RE = re.compile(r"^[a-z0-9_]+$")
+
+
+def validate_account_id(account_id: str) -> None:
+    """Raise ValueError unless account_id is a safe [a-z0-9_]+ slug."""
+    if not _ACCOUNT_ID_RE.fullmatch(account_id or ""):
+        raise ValueError(
+            f"Invalid account id '{account_id}' — use lowercase letters, digits and underscores only."
+        )
+
+
 def add_account(account_id: str, label: str, locale: str, token_file: str) -> Account:
+    validate_account_id(account_id)
     accounts = load_accounts()
     if any(a.id == account_id for a in accounts):
         raise ValueError(f"Account '{account_id}' already exists")

@@ -42,7 +42,7 @@ from config import (
 )
 from generate_short_now import build_short_script
 from pipeline.image_fetcher import fetch_all_section_images
-from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
+from pipeline.locales import Locale, get_locale
 from pipeline.logger import log
 from pipeline.script_generator import generate_script
 from pipeline.shorts_config import load_shorts_config
@@ -432,12 +432,23 @@ def generate_video_now(account_id: str, category: str, custom_topic: str = "", l
         raise RuntimeError(f"Video generation failed for account '{account_id}', category '{category}'")
 
     meta["yt_category_id"] = cat_info.get("yt_category_id", "25")
+    # publish_at_utc=None => uploaded public, live straight away. "Generate a
+    # video now" means now; scheduling it for datetime.now() would leave the
+    # video private behind a publishAt that has already lapsed by the time the
+    # resumable upload finishes.
     vid_id = upload_video(
         video_path=meta["path"], title=meta["title"], description=meta["description"],
-        tags=meta["tags"], publish_at_utc=datetime.now(timezone.utc),
+        tags=meta["tags"], publish_at_utc=None,
         category_id=meta["yt_category_id"], yt_language=meta["yt_language"],
         token_file=account.token_file,
     )
+    # Persist the id next to the render so /api/videos (which the dashboard
+    # polls after firing this off in the background) reports the video as
+    # "uploaded" and links to it.
+    try:
+        (Path(meta["path"]).parent / "youtube_id.txt").write_text(vid_id, encoding="utf-8")
+    except Exception as exc:
+        log.warning("Could not persist youtube_id.txt for %s: %s", vid_id, exc)
     upload_thumbnail(vid_id, meta["thumbnail_path"], token_file=account.token_file)
     add_video_to_playlist(vid_id, category, meta.get("category_label", category),
                           token_file=account.token_file, cache_dir=account.dir)
@@ -453,82 +464,90 @@ def run_pipeline_for_account(account):
     if not _acquire_lock():
         return  # another pipeline is running — skip silently
 
-    now_ist = datetime.now(IST)
-    log.info("=" * 60)
-    log.info("YouTube Auto-Poster started | %s IST", now_ist.strftime("%d %b %Y, %H:%M"))
-    log.info("Target slots: %s", ", ".join(UPLOAD_SLOTS_IST))
-
-    base_dir = _today_output_dir(account)
-
-    # __ Build per-slot topic plan ____________________________________________
-    log.info("Building slot plan from topic_config.json...")
-    slot_plan = _load_slot_plan(account)
-    for p in slot_plan:
-        log.info("  Slot %s → [%s] %s", p["slot"], p["category"] or "auto", p["topic"])
-
-    # __ Generate all videos __________________________________________________
-    videos = []
-    for i, plan in enumerate(slot_plan, start=1):
-        # News-category videos get a faster, more urgent voice
-        rate = NEWS_TTS_RATE if plan.get("category") in NEWS_CATEGORIES else None
-        meta = _run_single_video(
-            topic=plan["topic"],
-            slot_str=plan["slot"],
-            index=i,
-            base_dir=base_dir,
-            category_style=plan.get("category_style", ""),
-            voice_rate=rate,
-            category=plan.get("category", ""),
-            category_color=plan.get("category_color", ""),
-            category_label=plan.get("category_label", ""),
-            locale=plan.get("locale"),
-            account_dir=account.dir,
-        )
-        if meta:
-            meta["yt_category_id"] = plan.get("yt_category_id", "25")
-            videos.append(meta)
-
-    if not videos:
-        log.error("No videos generated — aborting upload step.")
-        return
-
-    # __ Upload + schedule ____________________________________________________
-    log.info("Uploading %d videos to YouTube...", len(videos))
-    for v in videos:
-        publish_utc = _ist_slot_to_utc(v["slot"])
-        log.info("Uploading: %s → %s IST", v["title"][:60], v["slot"])
-        try:
-            vid_id = upload_video(
-                video_path=v["path"],
-                title=v["title"],
-                description=v["description"],
-                tags=v["tags"],
-                publish_at_utc=publish_utc,
-                category_id=v.get("yt_category_id", "25"),
-                yt_language=v.get("yt_language", "hi"),
-                token_file=account.token_file,
-            )
-            upload_thumbnail(vid_id, v["thumbnail_path"], token_file=account.token_file)
-            add_video_to_playlist(vid_id, v.get("category", ""), v.get("category_label", ""),
-                                   token_file=account.token_file, cache_dir=account.dir)
-            upload_captions(vid_id, v.get("captions_srt", ""), language=v.get("yt_language", "hi"),
-                             token_file=account.token_file)
-        except Exception as e:
-            log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
-
-    # __ YouTube Shorts (5 per day: India / World / Business / Entertainment / Sports breaking news) ___
+    # Everything below runs inside try/finally so pipeline.lock is ALWAYS
+    # released — on success, on the "no videos" early return, and on any
+    # exception that escapes to run_pipeline()'s per-account handler. Leaking
+    # it would leave a live-PID lock held by this very process, which
+    # _acquire_lock() correctly refuses to steal, silently skipping every
+    # remaining account for the rest of the run.
     try:
-        _run_shorts(base_dir, account)
-    except Exception as e:
-        log.error("Shorts stage failed: %s", e, exc_info=True)
+        now_ist = datetime.now(IST)
+        log.info("=" * 60)
+        log.info("YouTube Auto-Poster started | %s IST", now_ist.strftime("%d %b %Y, %H:%M"))
+        log.info("Target slots: %s", ", ".join(UPLOAD_SLOTS_IST))
 
-    # __ Disk cleanup ________________________________________________________
-    log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
-    _cleanup_old_output(account)
+        base_dir = _today_output_dir(account)
 
-    log.info("Pipeline complete. Videos scheduled for 18:30–19:40 IST.")
-    log.info("=" * 60)
-    _release_lock()
+        # __ Build per-slot topic plan ________________________________________
+        log.info("Building slot plan from topic_config.json...")
+        slot_plan = _load_slot_plan(account)
+        for p in slot_plan:
+            log.info("  Slot %s → [%s] %s", p["slot"], p["category"] or "auto", p["topic"])
+
+        # __ Generate all videos ______________________________________________
+        videos = []
+        for i, plan in enumerate(slot_plan, start=1):
+            # News-category videos get a faster, more urgent voice
+            rate = NEWS_TTS_RATE if plan.get("category") in NEWS_CATEGORIES else None
+            meta = _run_single_video(
+                topic=plan["topic"],
+                slot_str=plan["slot"],
+                index=i,
+                base_dir=base_dir,
+                category_style=plan.get("category_style", ""),
+                voice_rate=rate,
+                category=plan.get("category", ""),
+                category_color=plan.get("category_color", ""),
+                category_label=plan.get("category_label", ""),
+                locale=plan.get("locale"),
+                account_dir=account.dir,
+            )
+            if meta:
+                meta["yt_category_id"] = plan.get("yt_category_id", "25")
+                videos.append(meta)
+
+        if not videos:
+            log.error("No videos generated — aborting upload step.")
+            return
+
+        # __ Upload + schedule ________________________________________________
+        log.info("Uploading %d videos to YouTube...", len(videos))
+        for v in videos:
+            publish_utc = _ist_slot_to_utc(v["slot"])
+            log.info("Uploading: %s → %s IST", v["title"][:60], v["slot"])
+            try:
+                vid_id = upload_video(
+                    video_path=v["path"],
+                    title=v["title"],
+                    description=v["description"],
+                    tags=v["tags"],
+                    publish_at_utc=publish_utc,
+                    category_id=v.get("yt_category_id", "25"),
+                    yt_language=v.get("yt_language", "hi"),
+                    token_file=account.token_file,
+                )
+                upload_thumbnail(vid_id, v["thumbnail_path"], token_file=account.token_file)
+                add_video_to_playlist(vid_id, v.get("category", ""), v.get("category_label", ""),
+                                       token_file=account.token_file, cache_dir=account.dir)
+                upload_captions(vid_id, v.get("captions_srt", ""), language=v.get("yt_language", "hi"),
+                                 token_file=account.token_file)
+            except Exception as e:
+                log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
+
+        # __ YouTube Shorts (India / World / Business / Entertainment / Sports breaking news) __
+        try:
+            _run_shorts(base_dir, account)
+        except Exception as e:
+            log.error("Shorts stage failed: %s", e, exc_info=True)
+
+        # __ Disk cleanup _____________________________________________________
+        log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
+        _cleanup_old_output(account)
+
+        log.info("Pipeline complete. Videos scheduled for 18:30–19:40 IST.")
+        log.info("=" * 60)
+    finally:
+        _release_lock()
 
 
 def run_pipeline():
@@ -567,6 +586,22 @@ def _run_shorts(base_dir: Path, account):
     feeds = cfg.get("feeds") or ["india", "world", "business"]
     plan = [{"feed": f, "focus": f"{f.title()} breaking news"} for f in feeds]
 
+    # The account's own slot list wins; the global config constant is only a
+    # fallback for accounts that haven't configured (or have emptied) theirs.
+    upload_slots = cfg.get("upload_slots") or SHORTS_UPLOAD_SLOTS
+
+    # The daily Shorts stage is feed-driven breaking news — the only content
+    # type it can produce is "news" (every other type in
+    # content_types_enabled is reachable through the on-demand custom-topic
+    # path, generate_short_now.py --topic --content-type). So the one way this
+    # stage can honour the account's content_types_enabled list is to stand
+    # down when "news" has been switched off for it.
+    enabled_types = cfg.get("content_types_enabled")
+    if enabled_types and "news" not in enabled_types:
+        log.info("Shorts stage skipped for account '%s' — 'news' is not in its content_types_enabled (%s)",
+                 account.id, ", ".join(enabled_types))
+        return
+
     log.info("Generating %d YouTube Shorts...", shorts_per_day)
 
     for i in range(1, shorts_per_day + 1):
@@ -574,7 +609,9 @@ def _run_shorts(base_dir: Path, account):
         work_dir = base_dir / f"short_{i:02d}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        locale = get_locale(plan_entry.get("locale") or DEFAULT_LOCALE)
+        # Same fallback the long-form path uses: the account's own configured
+        # locale, not the global default.
+        locale = get_locale(plan_entry.get("locale") or account.locale)
         try:
             # 1-2. Real headlines + script (Claude → OpenRouter → Gemini chain)
             try:
@@ -592,7 +629,7 @@ def _run_shorts(base_dir: Path, account):
             video_path = create_short(script, str(work_dir), category="news", locale=locale)
 
             # 4. Upload with a scheduled publish slot
-            slot = SHORTS_UPLOAD_SLOTS[(i - 1) % len(SHORTS_UPLOAD_SLOTS)]
+            slot = upload_slots[(i - 1) % len(upload_slots)]
             title = script.get("title", f"आज की बड़ी खबरें {i}")
             if "#shorts" not in title.lower():
                 title = safe_truncate(title, 82, suffix=" #Shorts")
