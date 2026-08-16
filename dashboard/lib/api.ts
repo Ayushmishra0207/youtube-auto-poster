@@ -56,7 +56,20 @@ function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Respo
 
 async function unwrap<T>(res: Response, label: string): Promise<T> {
   if (res.status === 401) throw new AuthError("Not authenticated");
-  if (!res.ok) throw new Error(`API ${label} → ${res.status}`);
+  if (!res.ok) {
+    // Surface the backend's actual error text (FastAPI's {detail: "..."} body
+    // shape, or any other JSON/plain-text error) instead of just the bare
+    // status code — callers that display e.message (e.g. VideoGeneratePanel)
+    // then show the real validation/failure reason.
+    let detail = "";
+    try {
+      const body = await res.clone().json();
+      detail = (body && typeof body === "object" && "detail" in body) ? String(body.detail) : JSON.stringify(body);
+    } catch {
+      try { detail = await res.clone().text(); } catch { /* no body available */ }
+    }
+    throw new Error(detail ? `API ${label} → ${res.status}: ${detail}` : `API ${label} → ${res.status}`);
+  }
   return res.json();
 }
 
@@ -144,13 +157,13 @@ export const api = {
 };
 
 // Shape of POST /api/videos/generate's response (api/main.py's generate_video) —
-// {ok, title, youtube_id} on success; {detail} is FastAPI's error-body shape,
-// included here for callers that want to surface it after a caught error.
+// this is only ever reached on success (2xx); failures (unknown account/category,
+// generation errors) come back as a non-2xx HTTPException, which unwrap() turns
+// into a thrown Error carrying the backend's detail text instead of a value here.
 export interface GenerateVideoResult {
   ok: boolean;
-  title?: string;
+  title: string;
   youtube_id?: string;
-  detail?: string;
 }
 
 export interface TopicConfigSlot {

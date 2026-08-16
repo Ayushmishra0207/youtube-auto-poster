@@ -25,9 +25,12 @@ export default function VideoGeneratePanel() {
     setResult("Generating... this takes a few minutes.");
     try {
       const res = await api.generateVideo(accountId, category, customTopic, locale);
-      setResult(res.ok ? `Done: ${res.title} -> https://youtube.com/watch?v=${res.youtube_id}` : `Failed: ${res.detail || "unknown error"}`);
+      setResult(`Done: ${res.title} -> https://youtube.com/watch?v=${res.youtube_id}`);
     } catch (e) {
-      setResult(`Failed: ${e}`);
+      // Failures (unknown account/category, generation errors) come back as a
+      // non-2xx response — unwrap() in api.ts embeds the backend's real detail
+      // text in this Error's message, so surface that instead of a generic one.
+      setResult(`Failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     setBusy(false);
   };
