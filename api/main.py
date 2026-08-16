@@ -53,8 +53,10 @@ from pydantic import BaseModel
 import auth as auth_module
 from config import ENGAGEMENT_POLL_SECONDS, INSTAGRAM_POLL_SECONDS, UPLOAD_SLOTS_IST
 from db import init_db
+from pipeline.accounts import load_accounts, get_account, set_account_enabled, add_account
 from pipeline.locales import DEFAULT_LOCALE, LOCALES, locales_by_continent
 from pipeline.logger import log
+from pipeline.shorts_config import load_shorts_config, save_shorts_config
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR         = Path(__file__).parent.parent
@@ -1199,6 +1201,65 @@ async def save_settings(payload: SettingsPayload):
     updates = {k: v for k, v in payload.model_dump().items() if v is not None and v != "***"}
     if updates:
         _write_env(updates)
+    return {"ok": True}
+
+
+# ── Accounts ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/accounts")
+async def list_accounts():
+    accounts = load_accounts()
+    return {
+        "accounts": [
+            {
+                "id": a.id, "label": a.label, "locale": a.locale,
+                "enabled": a.enabled, "created_at": a.created_at,
+                "token_exists": a.token_path.exists(),
+            }
+            for a in accounts
+        ]
+    }
+
+@app.post("/api/accounts/{account_id}/toggle")
+async def toggle_account(account_id: str, body: dict):
+    enabled = bool(body.get("enabled", True))
+    try:
+        set_account_enabled(account_id, enabled)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "id": account_id, "enabled": enabled}
+
+@app.get("/api/accounts/{account_id}/topic-config")
+async def get_account_topic_config(account_id: str):
+    account = get_account(account_id)
+    if not account:
+        raise HTTPException(404, f"Unknown account '{account_id}'")
+    if not account.topic_config_path.exists():
+        return {"slots": [], "categories": {}}
+    return json.loads(account.topic_config_path.read_text(encoding="utf-8"))
+
+@app.post("/api/accounts/{account_id}/topic-config")
+async def save_account_topic_config(account_id: str, body: dict):
+    account = get_account(account_id)
+    if not account:
+        raise HTTPException(404, f"Unknown account '{account_id}'")
+    account.dir.mkdir(parents=True, exist_ok=True)
+    account.topic_config_path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True}
+
+@app.get("/api/accounts/{account_id}/shorts-config")
+async def get_account_shorts_config(account_id: str):
+    account = get_account(account_id)
+    if not account:
+        raise HTTPException(404, f"Unknown account '{account_id}'")
+    return load_shorts_config(account)
+
+@app.post("/api/accounts/{account_id}/shorts-config")
+async def save_account_shorts_config(account_id: str, body: dict):
+    account = get_account(account_id)
+    if not account:
+        raise HTTPException(404, f"Unknown account '{account_id}'")
+    save_shorts_config(account, body)
     return {"ok": True}
 
 
