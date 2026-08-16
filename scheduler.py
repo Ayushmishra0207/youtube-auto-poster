@@ -391,6 +391,61 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         return None
 
 
+def _next_video_index(base_dir: Path) -> int:
+    existing = [int(p.name.split("_")[1]) for p in base_dir.glob("video_*") if p.name.split("_")[1].isdigit()]
+    return (max(existing) + 1) if existing else 1
+
+
+def generate_video_now(account_id: str, category: str, custom_topic: str = "", locale_override: str = "") -> dict:
+    """
+    Generate and upload ONE long-form video immediately for account_id —
+    used by the dashboard's on-demand "Generate video now" panel. Raises
+    ValueError for an unknown account or category.
+    """
+    from pipeline.accounts import get_account
+
+    account = get_account(account_id)
+    if not account:
+        raise ValueError(f"Unknown account '{account_id}'")
+
+    cfg = json.loads(account.topic_config_path.read_text(encoding="utf-8")) if account.topic_config_path.exists() else {}
+    cat_info = cfg.get("categories", {}).get(category, {})
+    if not cat_info:
+        raise ValueError(f"Unknown category '{category}' for account '{account_id}'")
+
+    locale = get_locale(locale_override) if locale_override.strip() else get_locale(account.locale)
+    assigned: set = set()
+    topic = custom_topic.strip() or _pick_topic_for_category(cat_info, locale, assigned, topic_history_base_dir=account.dir)
+
+    base_dir = account.output_dir / datetime.now(IST).strftime("%Y-%m-%d")
+    base_dir.mkdir(parents=True, exist_ok=True)
+    index = _next_video_index(base_dir)
+
+    meta = _run_single_video(
+        topic=topic, slot_str="on-demand", index=index, base_dir=base_dir,
+        category_style=cat_info.get("prompt_style", ""),
+        category=category, category_color=cat_info.get("color", ""),
+        category_label=cat_info.get("label", category),
+        locale=locale, account_dir=account.dir,
+    )
+    if not meta:
+        raise RuntimeError(f"Video generation failed for account '{account_id}', category '{category}'")
+
+    meta["yt_category_id"] = cat_info.get("yt_category_id", "25")
+    vid_id = upload_video(
+        video_path=meta["path"], title=meta["title"], description=meta["description"],
+        tags=meta["tags"], publish_at_utc=datetime.now(timezone.utc),
+        category_id=meta["yt_category_id"], yt_language=meta["yt_language"],
+        token_file=account.token_file,
+    )
+    upload_thumbnail(vid_id, meta["thumbnail_path"], token_file=account.token_file)
+    add_video_to_playlist(vid_id, category, meta.get("category_label", category),
+                          token_file=account.token_file, cache_dir=account.dir)
+    upload_captions(vid_id, meta.get("captions_srt", ""), language=meta["yt_language"], token_file=account.token_file)
+    meta["youtube_id"] = vid_id
+    return meta
+
+
 # ___ Main pipeline ____________________________________________________________
 
 def run_pipeline_for_account(account):
