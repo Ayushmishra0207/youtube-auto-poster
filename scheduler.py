@@ -130,19 +130,19 @@ def _ist_slot_to_utc(slot_str: str) -> datetime:
     return naive.astimezone(timezone.utc)
 
 
-def _today_output_dir() -> Path:
-    """Return date-stamped output directory, e.g. output/2024-01-15/"""
+def _today_output_dir(account) -> Path:
+    """Return date-stamped output directory, e.g. output/default/2024-01-15/"""
     date_str = datetime.now(IST).strftime("%Y-%m-%d")
-    d = Path(OUTPUT_DIR) / date_str
+    d = account.output_dir / date_str
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _cleanup_old_output():
+def _cleanup_old_output(account):
     """Delete dated output directories older than KEEP_OUTPUT_DAYS."""
     cutoff = datetime.now(IST).date() - timedelta(days=KEEP_OUTPUT_DAYS)
     removed = 0
-    for entry in Path(OUTPUT_DIR).iterdir():
+    for entry in account.output_dir.iterdir():
         if not entry.is_dir():
             continue
         try:
@@ -211,7 +211,7 @@ def _pick_topic_for_category(cat_info: dict, locale: Locale, assigned_topics: se
     return general[0] if general else f"{locale.label} news today"
 
 
-def _load_slot_plan() -> list[dict]:
+def _load_slot_plan(account) -> list[dict]:
     """
     Build the per-slot plan from topic_config.json + topics_override.json.
 
@@ -226,9 +226,9 @@ def _load_slot_plan() -> list[dict]:
     categories = {}
     slot_categories = []
 
-    if TOPIC_CONFIG_FILE.exists():
+    if account.topic_config_path.exists():
         try:
-            cfg = json.loads(TOPIC_CONFIG_FILE.read_text(encoding="utf-8"))
+            cfg = json.loads(account.topic_config_path.read_text(encoding="utf-8"))
             categories   = cfg.get("categories", {})
             slot_categories = cfg.get("slots", [])
         except Exception as e:
@@ -258,7 +258,7 @@ def _load_slot_plan() -> list[dict]:
         else:
             topic = None   # will fetch from trends / fallback below
 
-        locale = get_locale(slot_cfg.get("locale") or DEFAULT_LOCALE)
+        locale = get_locale(slot_cfg.get("locale") or account.locale)
 
         plan.append({
             "slot":            slot_str,
@@ -293,6 +293,7 @@ def _load_slot_plan() -> list[dict]:
                 p["topic"] = _pick_topic_for_category(
                     {"yt_category_id": p["yt_category_id"], "search_query": p["search_query"], "fallback_topics": p["fallback_topics"]},
                     p["locale"], assigned_topics,
+                    topic_history_base_dir=account.dir,
                 )
                 assigned_topics.add(p["topic"].strip().lower())
 
@@ -310,7 +311,7 @@ def _append_chapters_to_description(script: dict, voices: list) -> dict:
 def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
                       category_style: str = "", voice_rate: str | None = None,
                       category: str = "", category_color: str = "", category_label: str = "",
-                      locale: Locale | None = None) -> dict | None:
+                      locale: Locale | None = None, account_dir: Path | None = None) -> dict | None:
     """Full pipeline for one trending topic. Returns video metadata or None."""
     locale = locale or get_locale(None)
     work_dir = base_dir / f"video_{index:02d}"
@@ -323,7 +324,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         log.info("[%d] Generating script...", index)
         script = generate_script(topic, category_style=category_style, locale=locale)
         log.info("[%d] Title: %s", index, script["title"])
-        record_topic(script["title"], namespace="longform")
+        record_topic(script["title"], namespace="longform", base_dir=account_dir)
 
         # 2. Voice
         log.info("[%d] Generating voice-over...", index)
@@ -391,8 +392,8 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
 
 # ___ Main pipeline ____________________________________________________________
 
-def run_pipeline():
-    """Generate all 8 videos and schedule them for upload."""
+def run_pipeline_for_account(account):
+    """Generate all 8 videos and schedule them for upload, for one account."""
     if not _acquire_lock():
         return  # another pipeline is running — skip silently
 
@@ -401,11 +402,11 @@ def run_pipeline():
     log.info("YouTube Auto-Poster started | %s IST", now_ist.strftime("%d %b %Y, %H:%M"))
     log.info("Target slots: %s", ", ".join(UPLOAD_SLOTS_IST))
 
-    base_dir = _today_output_dir()
+    base_dir = _today_output_dir(account)
 
     # __ Build per-slot topic plan ____________________________________________
     log.info("Building slot plan from topic_config.json...")
-    slot_plan = _load_slot_plan()
+    slot_plan = _load_slot_plan(account)
     for p in slot_plan:
         log.info("  Slot %s → [%s] %s", p["slot"], p["category"] or "auto", p["topic"])
 
@@ -425,6 +426,7 @@ def run_pipeline():
             category_color=plan.get("category_color", ""),
             category_label=plan.get("category_label", ""),
             locale=plan.get("locale"),
+            account_dir=account.dir,
         )
         if meta:
             meta["yt_category_id"] = plan.get("yt_category_id", "25")
@@ -448,10 +450,13 @@ def run_pipeline():
                 publish_at_utc=publish_utc,
                 category_id=v.get("yt_category_id", "25"),
                 yt_language=v.get("yt_language", "hi"),
+                token_file=account.token_file,
             )
-            upload_thumbnail(vid_id, v["thumbnail_path"])
-            add_video_to_playlist(vid_id, v.get("category", ""), v.get("category_label", ""))
-            upload_captions(vid_id, v.get("captions_srt", ""), language=v.get("yt_language", "hi"))
+            upload_thumbnail(vid_id, v["thumbnail_path"], token_file=account.token_file)
+            add_video_to_playlist(vid_id, v.get("category", ""), v.get("category_label", ""),
+                                   token_file=account.token_file, cache_dir=account.dir)
+            upload_captions(vid_id, v.get("captions_srt", ""), language=v.get("yt_language", "hi"),
+                             token_file=account.token_file)
         except Exception as e:
             log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
 
@@ -463,11 +468,26 @@ def run_pipeline():
 
     # __ Disk cleanup ________________________________________________________
     log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
-    _cleanup_old_output()
+    _cleanup_old_output(account)
 
     log.info("Pipeline complete. Videos scheduled for 18:30–19:40 IST.")
     log.info("=" * 60)
     _release_lock()
+
+
+def run_pipeline():
+    from pipeline.accounts import enabled_accounts
+    accounts = enabled_accounts()
+    if not accounts:
+        log.error("No enabled accounts configured — nothing to do.")
+        return
+    for account in accounts:
+        log.info("=" * 60)
+        log.info("Running pipeline for account '%s' (%s)", account.id, account.label)
+        try:
+            run_pipeline_for_account(account)
+        except Exception as exc:
+            log.error("Pipeline failed for account '%s': %s", account.id, exc, exc_info=True)
 
 
 # ___ YouTube Shorts ___________________________________________________________
