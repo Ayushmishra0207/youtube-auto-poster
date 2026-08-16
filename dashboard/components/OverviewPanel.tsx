@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import type { PipelineStatus } from "@/lib/types";
 import { Activity, Video, Clock, CheckCircle, AlertCircle } from "lucide-react";
 
@@ -50,6 +51,7 @@ function LogLine({ line }: { line: string }) {
 }
 
 export default function OverviewPanel() {
+  const { accountId } = useAccount();
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,7 +60,7 @@ export default function OverviewPanel() {
 
   const refresh = async (isFirst = false) => {
     try {
-      const [s, l] = await Promise.all([api.status(), api.logs(20)]);
+      const [s, l] = await Promise.all([api.status(), api.logs(20, accountId)]);
       setStatus(s as PipelineStatus);
       setLogs((l as { logs: string[] }).logs);
       setError(false);
@@ -73,7 +75,7 @@ export default function OverviewPanel() {
     refresh(true);
     const id = setInterval(() => refresh(false), 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [accountId]);
 
   // Animate dots while loading
   useEffect(() => {

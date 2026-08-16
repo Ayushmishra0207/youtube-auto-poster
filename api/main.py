@@ -1045,6 +1045,7 @@ class GenerateShortPayload(BaseModel):
     content_type: str = "news"    # tone/style for a custom topic (news, funny, story, devotional, ...); ignored if topic is empty
     locale: str = DEFAULT_LOCALE  # region/language target (pipeline/locales.py)
     count: int = 1                # how many Shorts to generate in this run (batch mode)
+    account_id: str = "default"   # which account to generate/upload the Short(s) for
 
 @app.post("/api/shorts/generate")
 async def generate_short(payload: GenerateShortPayload):
@@ -1063,7 +1064,7 @@ async def generate_short(payload: GenerateShortPayload):
         return {"ok": False, "message": "A Short is already being generated"}
 
     args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--locale", payload.locale, "--count", str(count),
-            "--content-type", payload.content_type or "news"]
+            "--content-type", payload.content_type or "news", "--account", payload.account_id]
     if topic:
         args += ["--topic", topic]
     else:

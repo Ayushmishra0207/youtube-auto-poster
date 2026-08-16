@@ -60,6 +60,15 @@ async function unwrap<T>(res: Response, label: string): Promise<T> {
   return res.json();
 }
 
+// Builds a "?k=v&k2=v2" query string, skipping undefined/empty values —
+// used to thread optional params like account_id through GET calls.
+function qs(params: Record<string, string | number | undefined>): string {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== "")
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetchWithTimeout(`${BASE}${path}`, { headers: authHeaders() });
   return unwrap<T>(res, path);
@@ -105,7 +114,7 @@ export const api = {
   logout:          ()                          => post("/api/auth/logout"),
   me:              ()                          => get<{ user: { id: number; username: string } }>("/api/auth/me"),
   status:          ()                          => get("/api/status"),
-  videos:          (date?: string)             => get(`/api/videos${date ? `?date=${date}` : ""}`),
+  videos:          (date?: string, accountId?: string) => get(`/api/videos${qs({ date, account_id: accountId })}`),
   topics:          ()                          => get("/api/topics"),
   setTopics:       (topics: string[])          => post("/api/topics", { topics }),
   clearTopics:     ()                          => del("/api/topics"),
@@ -113,14 +122,14 @@ export const api = {
   saveTopicConfig: (slots: TopicConfigSlot[])  => put("/api/topic-config", { slots }),
   analytics:       ()                          => get("/api/analytics"),
   run:             ()                          => post("/api/run"),
-  logs:            (lines = 150)               => get<{ logs: string[] }>(`/api/logs?lines=${lines}`),
+  logs:            (lines = 150, accountId?: string) => get<{ logs: string[] }>(`/api/logs${qs({ lines, account_id: accountId })}`),
   settings:        ()                          => get("/api/settings"),
   saveSettings:    (data: Record<string, string>) => post("/api/settings", data),
-  script:          (date: string, index: number)  => get(`/api/videos/${date}/${index}/script`),
-  shorts:          (date?: string)             => get(`/api/shorts${date ? `?date=${date}` : ""}`),
-  generateShort:   (feed: "india" | "world" | "business", topic: string = "", contentType: string = "news") =>
-    post("/api/shorts/generate", { feed, topic, content_type: contentType }),
-  shortScript:     (date: string, index: number)  => get(`/api/shorts/${date}/${index}/script`),
+  script:          (date: string, index: number, accountId?: string) => get(`/api/videos/${date}/${index}/script${qs({ account_id: accountId })}`),
+  shorts:          (date?: string, accountId?: string) => get(`/api/shorts${qs({ date, account_id: accountId })}`),
+  generateShort:   (feed: "india" | "world" | "business", topic: string = "", contentType: string = "news", accountId: string = "default") =>
+    post("/api/shorts/generate", { feed, topic, content_type: contentType, account_id: accountId }),
+  shortScript:     (date: string, index: number, accountId?: string) => get(`/api/shorts/${date}/${index}/script${qs({ account_id: accountId })}`),
   instagramPosts:     ()               => get<{ posts: InstagramPost[] }>("/api/instagram/posts"),
   retryInstagramPost: (id: string)     => post(`/api/instagram/posts/${id}/retry`),
   runInstagramNow:    ()               => post<{ ok: boolean; posted: number; failed: number }>("/api/instagram/run"),
@@ -131,8 +140,18 @@ export const api = {
   getAccountShortsConfig:  (id: string)                     => get<any>(`/api/accounts/${id}/shorts-config`),
   saveAccountShortsConfig: (id: string, cfg: unknown)       => post(`/api/accounts/${id}/shorts-config`, cfg),
   generateVideo: (accountId: string, category: string, customTopic: string, locale: string) =>
-    post("/api/videos/generate", { account_id: accountId, category, custom_topic: customTopic, locale }),
+    post<GenerateVideoResult>("/api/videos/generate", { account_id: accountId, category, custom_topic: customTopic, locale }),
 };
+
+// Shape of POST /api/videos/generate's response (api/main.py's generate_video) —
+// {ok, title, youtube_id} on success; {detail} is FastAPI's error-body shape,
+// included here for callers that want to surface it after a caught error.
+export interface GenerateVideoResult {
+  ok: boolean;
+  title?: string;
+  youtube_id?: string;
+  detail?: string;
+}
 
 export interface TopicConfigSlot {
   slot: string;

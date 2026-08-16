@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, authedMediaUrl, authHeaders } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import type { ShortMeta } from "@/lib/types";
 import { Play, X, Upload, ExternalLink, CheckCircle, Sparkles, Newspaper, Globe2, TrendingUp, ChevronDown, Check } from "lucide-react";
 
@@ -148,9 +149,11 @@ function StatusBadge({ status }: { status: ShortMeta["status"] }) {
 
 function UploadButton({
   short,
+  accountId,
   onUploaded,
 }: {
   short: ShortMeta;
+  accountId: string;
   onUploaded: (index: number, videoId: string, url: string) => void;
 }) {
   const [uploading, setUploading] = useState(false);
@@ -160,7 +163,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}`, { method: "POST", headers: authHeaders() });
+      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}?account_id=${encodeURIComponent(accountId)}`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       onUploaded(short.index, data.video_id, data.url);
@@ -220,10 +223,12 @@ function UploadButton({
 
 function ShortCard({
   short,
+  accountId,
   onPlay,
   onUploaded,
 }: {
   short: ShortMeta;
+  accountId: string;
   onPlay: (s: ShortMeta) => void;
   onUploaded: (index: number, videoId: string, url: string) => void;
 }) {
@@ -285,7 +290,7 @@ function ShortCard({
         </div>
         <span className="text-xs font-mono" style={{ color: "#64748b" }}>#{short.index}</span>
         <div className="mt-auto pt-2">
-          <UploadButton short={short} onUploaded={onUploaded} />
+          <UploadButton short={short} accountId={accountId} onUploaded={onUploaded} />
         </div>
       </div>
     </div>
@@ -293,6 +298,7 @@ function ShortCard({
 }
 
 function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
+  const { accountId } = useAccount();
   const [feed, setFeed]           = useState<"india" | "world" | "business">("india");
   const [customTopic, setCustomTopic] = useState("");
   const [contentType, setContentType] = useState("news");
@@ -305,7 +311,7 @@ function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
     setGenerating(true);
     setMsg(null);
     try {
-      const res: any = await api.generateShort(feed, customTopic.trim(), contentType);
+      const res: any = await api.generateShort(feed, customTopic.trim(), contentType, accountId);
       if (res?.ok === false) {
         setMsg({ text: res.message ?? "Could not start generation", ok: false });
       } else {
@@ -392,22 +398,24 @@ function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
 }
 
 export default function ShortsPanel() {
+  const { accountId } = useAccount();
   const [shorts, setShorts]       = useState<ShortMeta[]>([]);
   const [playing, setPlaying]     = useState<ShortMeta | null>(null);
   const [loading, setLoading]     = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const refresh = () => api.shorts().then((r: any) => {
+  const refresh = () => api.shorts(undefined, accountId).then((r: any) => {
     setShorts(r.shorts);
     setIsGenerating(r.is_generating);
     setLoading(false);
   });
 
   useEffect(() => {
+    setLoading(true);
     refresh();
     const id = setInterval(refresh, 8000);
     return () => clearInterval(id);
-  }, []);
+  }, [accountId]);
 
   const handleUploaded = (index: number, videoId: string, url: string) => {
     setShorts((prev) =>
@@ -451,7 +459,7 @@ export default function ShortsPanel() {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {shorts.map((s) => (
-            <ShortCard key={s.index} short={s} onPlay={setPlaying} onUploaded={handleUploaded} />
+            <ShortCard key={s.index} short={s} accountId={accountId} onPlay={setPlaying} onUploaded={handleUploaded} />
           ))}
         </div>
       )}

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, authedMediaUrl, authHeaders } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import type { VideoMeta, VideoScript } from "@/lib/types";
 import { Play, Image as ImageIcon, FileJson, X, Upload, ExternalLink, CheckCircle } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -25,9 +26,11 @@ function StatusBadge({ status }: { status: VideoMeta["status"] }) {
 
 function UploadButton({
   video,
+  accountId,
   onUploaded,
 }: {
   video: VideoMeta;
+  accountId: string;
   onUploaded: (index: number, videoId: string, url: string) => void;
 }) {
   const [uploading, setUploading] = useState(false);
@@ -37,7 +40,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/upload-generated/${video.date}/${video.index}`, { method: "POST", headers: authHeaders() });
+      const res  = await fetch(`${BASE}/api/upload-generated/${video.date}/${video.index}?account_id=${encodeURIComponent(accountId)}`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       onUploaded(video.index, data.video_id, data.url);
@@ -97,10 +100,12 @@ function UploadButton({
 
 function VideoCard({
   video,
+  accountId,
   onPlay,
   onUploaded,
 }: {
   video: VideoMeta;
+  accountId: string;
   onPlay: (v: VideoMeta) => void;
   onUploaded: (index: number, videoId: string, url: string) => void;
 }) {
@@ -178,7 +183,7 @@ function VideoCard({
 
         {/* Upload / YouTube button */}
         <div className="mt-auto pt-2">
-          <UploadButton video={video} onUploaded={onUploaded} />
+          <UploadButton video={video} accountId={accountId} onUploaded={onUploaded} />
         </div>
       </div>
     </div>
@@ -186,16 +191,18 @@ function VideoCard({
 }
 
 export default function VideoGrid() {
+  const { accountId } = useAccount();
   const [videos, setVideos]   = useState<VideoMeta[]>([]);
   const [playing, setPlaying] = useState<VideoMeta | null>(null);
   const [script, setScript]   = useState<VideoScript | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.videos().then((r: any) => { setVideos(r.videos); setLoading(false); });
-    const id = setInterval(() => api.videos().then((r: any) => setVideos(r.videos)), 10000);
+    setLoading(true);
+    api.videos(undefined, accountId).then((r: any) => { setVideos(r.videos); setLoading(false); });
+    const id = setInterval(() => api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)), 10000);
     return () => clearInterval(id);
-  }, []);
+  }, [accountId]);
 
   const handleUploaded = (index: number, videoId: string, url: string) => {
     setVideos((prev) =>
@@ -211,7 +218,7 @@ export default function VideoGrid() {
     setPlaying(v);
     if (v.has_script) {
       try {
-        const s: any = await api.script(v.date, v.index);
+        const s: any = await api.script(v.date, v.index, accountId);
         setScript(s);
       } catch { setScript(null); }
     }
@@ -253,7 +260,7 @@ export default function VideoGrid() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {videos.map((v) => (
-            <VideoCard key={v.index} video={v} onPlay={openPlayer} onUploaded={handleUploaded} />
+            <VideoCard key={v.index} video={v} accountId={accountId} onPlay={openPlayer} onUploaded={handleUploaded} />
           ))}
         </div>
       )}

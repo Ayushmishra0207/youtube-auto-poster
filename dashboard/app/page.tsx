@@ -8,6 +8,7 @@ import OverviewPanel from "@/components/OverviewPanel";
 import AnalyticsPanel from "@/components/AnalyticsPanel";
 import TopicsPanel from "@/components/TopicsPanel";
 import VideoGrid from "@/components/VideoGrid";
+import VideoGeneratePanel from "@/components/VideoGeneratePanel";
 import ShortsPanel from "@/components/ShortsPanel";
 import InstagramPanel from "@/components/InstagramPanel";
 import LogViewer from "@/components/LogViewer";
@@ -78,7 +79,12 @@ export default function Dashboard() {
           {tab === "overview"   && <OverviewPanel />}
           {tab === "analytics"  && <AnalyticsPanel />}
           {tab === "topics"     && <TopicsPanel />}
-          {tab === "videos"     && <VideoGrid />}
+          {tab === "videos"     && (
+            <div className="space-y-6">
+              <VideoGeneratePanel />
+              <VideoGrid />
+            </div>
+          )}
           {tab === "shorts"     && <ShortsPanel />}
           {tab === "instagram"  && <InstagramPanel />}
           {tab === "upload"     && <UploadPanel />}

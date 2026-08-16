@@ -2,19 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import type { VideoMeta } from "@/lib/types";
 import { Clock, Upload, CheckCircle } from "lucide-react";
 
 const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30"];
 
 export default function ScheduleTimeline() {
+  const { accountId } = useAccount();
   const [videos, setVideos] = useState<VideoMeta[]>([]);
 
   useEffect(() => {
-    api.videos().then((r: any) => setVideos(r.videos));
-    const id = setInterval(() => api.videos().then((r: any) => setVideos(r.videos)), 10000);
+    api.videos(undefined, accountId).then((r: any) => setVideos(r.videos));
+    const id = setInterval(() => api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)), 10000);
     return () => clearInterval(id);
-  }, []);
+  }, [accountId]);
 
   const bySlot = SLOTS.map((slot) => ({
     slot,
