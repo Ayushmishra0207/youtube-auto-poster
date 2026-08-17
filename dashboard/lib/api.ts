@@ -26,6 +26,23 @@ export function clearToken(): void {
 
 export class AuthError extends Error {}
 
+// Fired whenever a request comes back 401 — e.g. the API server restarted
+// and its in-memory sessions were wiped. `page.tsx` listens for this and
+// bounces back to the login screen instead of leaving an uncaught
+// AuthError to crash the app.
+const AUTH_EXPIRED_EVENT = "auth-expired";
+
+function handleAuthExpired(): void {
+  clearToken();
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+}
+
+export function onAuthExpired(handler: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(AUTH_EXPIRED_EVENT, handler);
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
+}
+
 // For plain <img>/<video> tags, which can't set custom headers — the
 // backend accepts the session token as a "token" query param fallback
 // (see api/main.py's _session_token_from_request).
@@ -55,9 +72,31 @@ function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Respo
 }
 
 async function unwrap<T>(res: Response, label: string): Promise<T> {
-  if (res.status === 401) throw new AuthError("Not authenticated");
-  if (!res.ok) throw new Error(`API ${label} → ${res.status}`);
+  if (res.status === 401) { handleAuthExpired(); throw new AuthError("Not authenticated"); }
+  if (!res.ok) {
+    // Surface the backend's actual error text (FastAPI's {detail: "..."} body
+    // shape, or any other JSON/plain-text error) instead of just the bare
+    // status code — callers that display e.message (e.g. VideoGeneratePanel)
+    // then show the real validation/failure reason.
+    let detail = "";
+    try {
+      const body = await res.clone().json();
+      detail = (body && typeof body === "object" && "detail" in body) ? String(body.detail) : JSON.stringify(body);
+    } catch {
+      try { detail = await res.clone().text(); } catch { /* no body available */ }
+    }
+    throw new Error(detail ? `API ${label} → ${res.status}: ${detail}` : `API ${label} → ${res.status}`);
+  }
   return res.json();
+}
+
+// Builds a "?k=v&k2=v2" query string, skipping undefined/empty values —
+// used to thread optional params like account_id through GET calls.
+function qs(params: Record<string, string | number | undefined>): string {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== "")
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `?${parts.join("&")}` : "";
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -104,27 +143,56 @@ export const api = {
   login,
   logout:          ()                          => post("/api/auth/logout"),
   me:              ()                          => get<{ user: { id: number; username: string } }>("/api/auth/me"),
-  status:          ()                          => get("/api/status"),
-  videos:          (date?: string)             => get(`/api/videos${date ? `?date=${date}` : ""}`),
+  status:          (accountId?: string)        => get(`/api/status${qs({ account_id: accountId })}`),
+  videos:          (date?: string, accountId?: string) => get(`/api/videos${qs({ date, account_id: accountId })}`),
   topics:          ()                          => get("/api/topics"),
   setTopics:       (topics: string[])          => post("/api/topics", { topics }),
   clearTopics:     ()                          => del("/api/topics"),
+  // Legacy root-level topic_config.json routes. The pipeline reads
+  // accounts/<id>/topic_config.json, so the UI uses
+  // get/saveAccountTopicConfig below — these are kept only as the raw
+  // pre-multi-account endpoints and are not wired to any panel.
   topicConfig:     ()                          => get("/api/topic-config"),
   saveTopicConfig: (slots: TopicConfigSlot[])  => put("/api/topic-config", { slots }),
-  analytics:       ()                          => get("/api/analytics"),
+  analytics:       (accountId?: string)        => get(`/api/analytics${qs({ account_id: accountId })}`),
   run:             ()                          => post("/api/run"),
-  logs:            (lines = 150)               => get<{ logs: string[] }>(`/api/logs?lines=${lines}`),
+  logs:            (lines = 150, accountId?: string) => get<{ logs: string[] }>(`/api/logs${qs({ lines, account_id: accountId })}`),
   settings:        ()                          => get("/api/settings"),
   saveSettings:    (data: Record<string, string>) => post("/api/settings", data),
-  script:          (date: string, index: number)  => get(`/api/videos/${date}/${index}/script`),
-  shorts:          (date?: string)             => get(`/api/shorts${date ? `?date=${date}` : ""}`),
-  generateShort:   (feed: "india" | "world" | "business", topic: string = "", contentType: string = "news") =>
-    post("/api/shorts/generate", { feed, topic, content_type: contentType }),
-  shortScript:     (date: string, index: number)  => get(`/api/shorts/${date}/${index}/script`),
+  script:          (date: string, index: number, accountId?: string) => get(`/api/videos/${date}/${index}/script${qs({ account_id: accountId })}`),
+  shorts:          (date?: string, accountId?: string) => get(`/api/shorts${qs({ date, account_id: accountId })}`),
+  generateShort:   (feed: "india" | "world" | "business", topic: string = "", contentType: string = "news", accountId: string = "default") =>
+    post("/api/shorts/generate", { feed, topic, content_type: contentType, account_id: accountId }),
+  shortScript:     (date: string, index: number, accountId?: string) => get(`/api/shorts/${date}/${index}/script${qs({ account_id: accountId })}`),
   instagramPosts:     ()               => get<{ posts: InstagramPost[] }>("/api/instagram/posts"),
   retryInstagramPost: (id: string)     => post(`/api/instagram/posts/${id}/retry`),
   runInstagramNow:    ()               => post<{ ok: boolean; posted: number; failed: number }>("/api/instagram/run"),
+  listAccounts:            ()                              => get<any>("/api/accounts"),
+  toggleAccount:           (id: string, enabled: boolean)   => post(`/api/accounts/${id}/toggle`, { enabled }),
+  getAccountTopicConfig:   (id: string)                     => get<any>(`/api/accounts/${id}/topic-config`),
+  saveAccountTopicConfig:  (id: string, cfg: unknown)       => post(`/api/accounts/${id}/topic-config`, cfg),
+  getAccountShortsConfig:  (id: string)                     => get<any>(`/api/accounts/${id}/shorts-config`),
+  saveAccountShortsConfig: (id: string, cfg: unknown)       => post(`/api/accounts/${id}/shorts-config`, cfg),
+  generateVideo: (accountId: string, category: string, customTopic: string, locale: string) =>
+    post<GenerateVideoResult>("/api/videos/generate", { account_id: accountId, category, custom_topic: customTopic, locale }),
 };
+
+// Shape of POST /api/videos/generate's response (api/main.py's generate_video).
+//
+// Fire-and-forget, exactly like /api/shorts/generate: the endpoint validates
+// the account/category/locale, spawns generate_video_now.py, and returns
+// immediately — generation + upload takes minutes, far longer than this
+// client's 20s fetch timeout. There is no youtube_id to return yet; the
+// finished video shows up through the existing /api/videos poll.
+//
+// ok:false + message means "couldn't start" (something already running).
+// Genuine input errors come back as a non-2xx HTTPException, which unwrap()
+// turns into a thrown Error carrying the backend's detail text.
+export interface GenerateVideoResult {
+  ok: boolean;
+  pid?: number;
+  message?: string;
+}
 
 export interface TopicConfigSlot {
   slot: string;

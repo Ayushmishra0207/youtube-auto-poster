@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AccountProvider } from "@/lib/accountContext";
 
 export const metadata: Metadata = {
   title: "YouTube Auto-Poster",
@@ -13,7 +14,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Ambient background blobs */}
         <div className="blob-1" aria-hidden />
         <div className="blob-2" aria-hidden />
-        <div className="relative z-10">{children}</div>
+        <div className="relative z-10">
+          <AccountProvider>{children}</AccountProvider>
+        </div>
       </body>
     </html>
   );

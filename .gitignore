@@ -1,5 +1,6 @@
 # ── Secrets & credentials ─────────────────────────────────────
 .env
+.env.*
 *.pickle
 client_secrets.json
 api/credentials.json
@@ -10,9 +11,17 @@ output/
 logs/
 pipeline.lock
 short_generate.lock
+short_generate_*.lock
 engagement_state.json
 instagram_queue.json
 shorts_topic_history.json
+longform_topic_history.json
+youtube_playlists.json
+growth_audit_baseline.json
+growth_audit_history.json
+accounts.json
+accounts/
+*.log
 
 # ── Python ────────────────────────────────────────────────────
 __pycache__/
@@ -34,6 +43,7 @@ dashboard/out/
 # ── Assets (large binaries, downloaded by setup scripts) ──────
 assets/fonts/
 assets/music/
+assets/presenter/
 
 # ── OS ────────────────────────────────────────────────────────
 .DS_Store
@@ -44,3 +54,4 @@ desktop.ini
 .vscode/settings.json
 .idea/
 *.swp
+.vercel

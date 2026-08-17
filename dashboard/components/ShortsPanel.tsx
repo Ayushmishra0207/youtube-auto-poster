@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, authedMediaUrl, authHeaders } from "@/lib/api";
+import { useAccount } from "@/lib/accountContext";
 import type { ShortMeta } from "@/lib/types";
 import { Play, X, Upload, ExternalLink, CheckCircle, Sparkles, Newspaper, Globe2, TrendingUp, ChevronDown, Check } from "lucide-react";
 
@@ -33,16 +34,21 @@ const CONTENT_TYPES: Record<string, ContentType> = {
   poetry:         { label: "Poetry",         emoji: "🪶", color: "#f0abfc" },
 };
 
+const CONTENT_TYPE_GRID_WIDTH = 380;
+
 function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (key: string) => void }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 200 });
+  const [pos, setPos] = useState({ top: 0, left: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
   const current = CONTENT_TYPES[value] ?? CONTENT_TYPES.news;
 
   const handleOpen = () => {
     if (btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 200) });
+      // Keep the (wider, 2-column) panel on-screen even when the button
+      // sits near the right edge, instead of letting it overflow the viewport.
+      const left = Math.min(r.left, window.innerWidth - CONTENT_TYPE_GRID_WIDTH - 16);
+      setPos({ top: r.bottom + 4, left: Math.max(8, left) });
     }
     setOpen((o) => !o);
   };
@@ -72,14 +78,21 @@ function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (ke
               position: "fixed",
               top: pos.top,
               left: pos.left,
-              width: pos.width,
-              maxHeight: "50vh",
+              width: CONTENT_TYPE_GRID_WIDTH,
+              // All 16 content types fit in this 2-column grid at once — no
+              // scrolling needed on any normal screen. maxHeight/overflow
+              // stay only as a safety net for very short viewports.
+              maxHeight: "80vh",
               overflowY: "auto",
               zIndex: 9999,
               background: "#080c18",
               border: "1px solid rgba(79,195,247,0.25)",
               borderRadius: "12px",
               boxShadow: "0 20px 60px rgba(0,0,0,0.9)",
+              padding: "8px",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "4px",
             }}
           >
             {Object.entries(CONTENT_TYPES).map(([key, ct]) => (
@@ -90,10 +103,11 @@ function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (ke
                   width: "100%",
                   display: "flex",
                   alignItems: "center",
-                  gap: "10px",
-                  padding: "8px 12px",
+                  gap: "8px",
+                  padding: "8px 10px",
                   fontSize: "13px",
                   textAlign: "left",
+                  borderRadius: "8px",
                   background: key === value ? "rgba(255,255,255,0.05)" : "transparent",
                   border: "none",
                   cursor: "pointer",
@@ -103,8 +117,8 @@ function ContentTypeDropdown({ value, onSelect }: { value: string; onSelect: (ke
                 onMouseLeave={(e) => (e.currentTarget.style.background = key === value ? "rgba(255,255,255,0.05)" : "transparent")}
               >
                 <span>{ct.emoji}</span>
-                <span style={{ flex: 1 }}>{ct.label}</span>
-                {key === value && <Check size={12} style={{ color: ct.color }} />}
+                <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ct.label}</span>
+                {key === value && <Check size={12} style={{ flexShrink: 0, color: ct.color }} />}
               </button>
             ))}
           </div>
@@ -135,9 +149,11 @@ function StatusBadge({ status }: { status: ShortMeta["status"] }) {
 
 function UploadButton({
   short,
+  accountId,
   onUploaded,
 }: {
   short: ShortMeta;
+  accountId: string;
   onUploaded: (index: number, videoId: string, url: string) => void;
 }) {
   const [uploading, setUploading] = useState(false);
@@ -147,7 +163,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}`, { method: "POST", headers: authHeaders() });
+      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}?account_id=${encodeURIComponent(accountId)}`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Upload failed");
       onUploaded(short.index, data.video_id, data.url);
@@ -207,10 +223,12 @@ function UploadButton({
 
 function ShortCard({
   short,
+  accountId,
   onPlay,
   onUploaded,
 }: {
   short: ShortMeta;
+  accountId: string;
   onPlay: (s: ShortMeta) => void;
   onUploaded: (index: number, videoId: string, url: string) => void;
 }) {
@@ -272,7 +290,7 @@ function ShortCard({
         </div>
         <span className="text-xs font-mono" style={{ color: "#64748b" }}>#{short.index}</span>
         <div className="mt-auto pt-2">
-          <UploadButton short={short} onUploaded={onUploaded} />
+          <UploadButton short={short} accountId={accountId} onUploaded={onUploaded} />
         </div>
       </div>
     </div>
@@ -280,6 +298,7 @@ function ShortCard({
 }
 
 function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
+  const { accountId } = useAccount();
   const [feed, setFeed]           = useState<"india" | "world" | "business">("india");
   const [customTopic, setCustomTopic] = useState("");
   const [contentType, setContentType] = useState("news");
@@ -292,7 +311,7 @@ function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
     setGenerating(true);
     setMsg(null);
     try {
-      const res: any = await api.generateShort(feed, customTopic.trim(), contentType);
+      const res: any = await api.generateShort(feed, customTopic.trim(), contentType, accountId);
       if (res?.ok === false) {
         setMsg({ text: res.message ?? "Could not start generation", ok: false });
       } else {
@@ -379,22 +398,24 @@ function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
 }
 
 export default function ShortsPanel() {
+  const { accountId } = useAccount();
   const [shorts, setShorts]       = useState<ShortMeta[]>([]);
   const [playing, setPlaying]     = useState<ShortMeta | null>(null);
   const [loading, setLoading]     = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const refresh = () => api.shorts().then((r: any) => {
+  const refresh = () => api.shorts(undefined, accountId).then((r: any) => {
     setShorts(r.shorts);
     setIsGenerating(r.is_generating);
     setLoading(false);
-  });
+  }).catch(() => {});
 
   useEffect(() => {
+    setLoading(true);
     refresh();
     const id = setInterval(refresh, 8000);
     return () => clearInterval(id);
-  }, []);
+  }, [accountId]);
 
   const handleUploaded = (index: number, videoId: string, url: string) => {
     setShorts((prev) =>
@@ -438,7 +459,7 @@ export default function ShortsPanel() {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {shorts.map((s) => (
-            <ShortCard key={s.index} short={s} onPlay={setPlaying} onUploaded={handleUploaded} />
+            <ShortCard key={s.index} short={s} accountId={accountId} onPlay={setPlaying} onUploaded={handleUploaded} />
           ))}
         </div>
       )}

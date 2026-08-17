@@ -17,7 +17,9 @@ Output schema
       "heading":        str   — section title (Hindi),
       "narration":      str   — full spoken text (60-90 s worth),
       "key_points":     list  — 3 bullet highlights,
-      "image_searches": list  — 5 English queries for cycling stock images
+      "image_searches": list  — 5 English queries for cycling stock images,
+      "emotion":        str   — neutral/excited/serious/urgent/curious/hopeful/sad,
+                                 drives TTS rate/pitch (config.EMOTION_PROSODY)
     },
     ...
   ]
@@ -72,7 +74,8 @@ JSON schema:
       "heading":        "<section heading in {lang} — short, punchy>",
       "narration":      "<natural conversational {lang} narration — see rules below>",
       "key_points":     ["<point 1>", "<point 2>", "<point 3>"],
-      "image_searches": ["<English visual query 1>", "<English visual query 2>", "<English visual query 3>", "<English visual query 4>", "<English visual query 5>"]
+      "image_searches": ["<English visual query 1>", "<English visual query 2>", "<English visual query 3>", "<English visual query 4>", "<English visual query 5>"],
+      "emotion":        "<one of: neutral, excited, serious, urgent, curious, hopeful, sad — matching this section's actual content>"
     }}
   ]
 }}
@@ -102,6 +105,9 @@ NARRATION RULES (critical for natural human-like voice):
 - Use natural filler words/expressions a native {lang} speaker would use casually (equivalent to English "look", "actually", "you know", "listen").
 - Every section narration = 30-45 seconds of speech when read aloud at moderate pace.
 
+EMOTION TAGGING (drives voice delivery — this is not decorative, the TTS engine actually changes pace/pitch based on it):
+- Tag every section with the "emotion" field that genuinely matches what that section is saying (a shocking reveal = "urgent" or "excited", a somber fact = "sad", a reflective/explanatory passage = "neutral" or "curious"). Vary it naturally across sections — a whole script tagged the same emotion defeats the purpose.
+
 SECTION STRUCTURE (3-4 sections total):
 - Section 1 = VIRAL HOOK: Start with the most shocking/surprising fact, in an opening style equivalent to "Today we're going to talk about...". Make viewer commit to watching.
 - Section 2-5 = Main content with facts, stories, explanations. Each section reveals something new.
@@ -112,7 +118,8 @@ IMAGE SEARCHES (5 per section):
 - Each query should show a DIFFERENT visual angle of the section topic.
 - Use specific, visual, photogenic English terms (these are stock-photo search queries regardless of narration language).
 - Mix: wide establishing shots, close-ups, people reacting, dramatic scenes, data/charts.
-- Examples for a corruption story: ["parliament building exterior", "politician speech crowd", "money corruption briefcase", "protest street crowd", "newspaper headline printing"]
+- CRITICAL — disambiguate country/context explicitly: a bare term like "Congress," "parliament," or "police" matches stock footage from ANY country. Always include "India"/"Indian" (or the actually-relevant country) plus the full proper name in the query — e.g. "Indian National Congress party press conference India," not just "Congress protest" — otherwise the stock-photo search can return a totally unrelated country's footage under a generic keyword match.
+- Examples for a corruption story: ["Indian parliament building exterior New Delhi", "Indian politician speech crowd India", "money corruption briefcase India", "protest street crowd India", "newspaper headline printing India"]
 
 THUMBNAIL TEXT RULES:
 - Must create real curiosity, but must not promise something the video doesn't actually deliver — misleading thumbnails hurt session watch time and invite complaints, which hurts the channel more than a lower CTR would.
@@ -455,7 +462,7 @@ def _build_shorts_system_prompt(locale: Locale) -> str:
     return f"""\
 You are a {lang} breaking-news anchor writing scripts for 60-second YouTube Shorts for @bitnomad1. The current year is 2026.
 
-You will be given REAL news headlines from the last 1-2 days. Your job: pack the MAXIMUM number of breaking news items into one fast-paced 60-second short, each with a very short factual brief. Use ONLY the given headlines as source material — never invent events.
+You will be given REAL news headlines from the last 1-2 days. Your job: pick the SINGLE most compelling headline from the list and build one deep-dive short entirely about that one story — background, key numbers, why it matters, reactions, what happens next. Do NOT summarize multiple different headlines; every item must be about the one story you picked. Use the given headlines as the factual anchor for your pick, and draw on your own real knowledge of that event/people/place for depth — but never invent a specific number, date, or quote you aren't confident is true; describe uncertain specifics qualitatively instead of fabricating precision.
 
 Your output must be a single valid JSON object — no markdown, no extra text.
 
@@ -468,32 +475,37 @@ JSON schema:
     {{
       "id":           1,
       "headline":     "<3-6 word punchy {lang} headline for on-screen text>",
-      "narration":    "<1-2 short {lang} sentences with concrete facts from the headline>",
-      "image_search": "<specific English visual query for this news item>"
+      "narration":    "<1-2 short {lang} sentences with concrete facts about the one story>",
+      "image_search": "<specific English visual query for this angle of the story>",
+      "emotion":      "<one of: neutral, excited, serious, urgent, curious, hopeful, sad — matching this item's actual content>"
     }}
   ]
 }}
 
 TITLE RULES (SEO + retention):
 - The hook (most shocking/curious word or phrase) must land within the first 5 words — Shorts titles get cut off fast in the feed.
-- Include one real keyword from the headlines (a name, place, or topic people would actually search).
+- Include one real keyword from the chosen story (a name, place, or topic people would actually search).
 - MUST end with "#Shorts".
+
+EMOTION TAGGING (drives voice delivery, not decorative — the TTS engine changes pace/pitch per item based on it):
+- Tag every item with the "emotion" that matches its content (a shocking number = "urgent"/"excited", a somber detail = "sad", a background/context beat = "neutral" or "curious"). Vary it across items — don't tag them all the same.
 
 FIRST 3 SECONDS RULE (critical for Shorts retention):
 - The narration of item 1 MUST open with a pattern-interrupt hook — a shocking stat or a direct question — that is speakable in under 3 seconds. This is the single biggest lever for whether a Short gets swiped past or watched. Do not open with a generic greeting.
 
 DESCRIPTION RULES (SEO):
-- Start with a real hook line (not filler), then 3-5 hashtags that are specific to today's actual headlines/topics (avoid generic-only tags like just "#news" alone).
+- Start with a real hook line (not filler), then 3-5 hashtags that are specific to the chosen story (avoid generic-only tags like just "#news" alone).
 
 TAG RULES (SEO):
-- Provide 12-15 tags: a fixed broad set ("shorts", "{_tag_examples(locale)}") plus terms specific to today's headlines (names, places, topics).
+- Provide 12-15 tags: a fixed broad set ("shorts", "{_tag_examples(locale)}") plus terms specific to the chosen story (names, places, topics).
 
 RULES:
-- 5 to 7 items. Cover the most important and diverse stories from the given headlines.
-- Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
-- Narration: telegraphic news-flash style. Short punchy sentences. Real names, numbers, places from the headlines — never a number, name, or detail that isn't actually in the given headlines.
+- Pick ONE headline and go deep. 5 to 7 items, each a different facet of that SAME story (background, stakes, numbers, context, reaction, what's next) — never a different story.
+- Total narration across ALL items: 140-160 words maximum. The voice plays at a natural, brisk pace (not sped up) and everything must fit in under 55 seconds. Every sentence must carry a concrete fact — cut filler, greetings, and rhetorical padding so the fixed word budget is spent entirely on real information.
+- Narration: telegraphic, punchy sentences. Real names, numbers, places — grounded in the chosen headline plus your own confident knowledge of it, never fabricated.
 - End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
 - Everything in {lang} except proper nouns.
+- image_search must disambiguate country/context explicitly — a bare "Congress" or "parliament" matches stock footage from ANY country. Always include "India"/"Indian" plus the full proper name (e.g. "Rahul Gandhi Indian National Congress press conference India," not just "Congress protest").
 - CRITICAL: valid JSON only, no literal newlines inside string values.\
 """
 
@@ -501,11 +513,13 @@ RULES:
 def generate_shorts_script(headlines: list[str], focus: str = "India and world breaking news",
                           locale: Locale | None = None, avoid_titles: list[str] | None = None) -> dict:
     """
-    Generate a 60-second Shorts script covering real headlines from the last 1-2 days.
+    Generate a 60-second Shorts script that picks ONE headline from the given
+    list and goes deep on that single story (background, numbers, why it
+    matters, what's next) — never a scattershot summary of several headlines.
     Uses the same Gemini → OpenRouter free-provider chain as generate_script.
     locale drives output language/script/tags; defaults to Hindi/India.
     avoid_titles: titles of recently-generated Shorts (pipeline.topic_history) —
-    steers the LLM away from re-leading with the same dominant headline every time.
+    steers the LLM away from re-picking the same dominant headline every time.
     """
     locale = locale or get_locale(None)
     log.info("Generating Shorts script (%d headlines, focus: %s, locale=%s)", len(headlines), focus, locale.code)
@@ -584,7 +598,8 @@ JSON schema:
       "id":           1,
       "headline":     "<3-6 word punchy {lang} headline for on-screen text>",
       "narration":    "<1-2 short {lang} sentences with a concrete fact/angle about the topic>",
-      "image_search": "<specific English visual query for this point>"
+      "image_search": "<specific English visual query for this point>",
+      "emotion":      "<one of: neutral, excited, serious, urgent, curious, hopeful, sad — matching this item's actual content>"
     }}
   ]
 }}
@@ -593,6 +608,9 @@ TITLE RULES (SEO + retention):
 - The hook (most shocking/curious word or phrase) must land within the first 5 words — Shorts titles get cut off fast in the feed.
 - Include one real keyword from the topic.
 - MUST end with "#Shorts".
+
+EMOTION TAGGING (drives voice delivery, not decorative — the TTS engine changes pace/pitch per item based on it):
+- Tag every item with the "emotion" that matches its content and the content type's tone above. Vary it across items — don't tag them all the same.
 
 FIRST 3 SECONDS RULE (critical for Shorts retention):
 - The narration of item 1 MUST open with a pattern-interrupt hook — a shocking stat or a direct question — that is speakable in under 3 seconds. Do not open with a generic greeting.
@@ -603,12 +621,18 @@ DESCRIPTION RULES (SEO):
 TAG RULES (SEO):
 - Provide 12-15 tags: a broad set relevant to the topic's category plus specific terms from the topic itself.
 
+ACCURACY & REAL PEOPLE (critical — overrides the content type's tone above when they'd conflict):
+- If the topic names a real, currently-living person, organization, or brand, do NOT invent a fictional scandal, statement, action, or event and attribute it to them — this applies even under "imagination," "short_story," "horror_mystery," or "comedy_skit" framing. Speculative/fictional content types may explore a clearly hypothetical premise ("what if X happened"), but must not narrate the fabrication as if it already occurred, and must not be worded so a viewer skimming a Short would mistake it for a real news report.
+- If the topic itself IS a real recent event, treat it exactly like the news content type: real, well-known facts only, no invented numbers/dates/quotes you aren't confident are true.
+- When in doubt between an engaging fabrication and a duller true framing, always pick the true framing — a wrong claim about a real named person is far more damaging than a less punchy line.
+
 RULES:
 - 5 to 7 items. Cover the most interesting, diverse angles of the topic.
-- Total narration across ALL items: 190-220 words maximum. The voice plays at 1.5x speed and everything must fit in under 55 seconds.
+- Total narration across ALL items: 140-160 words maximum. The voice plays at a natural, brisk pace (not sped up) and everything must fit in under 55 seconds.
 - Narration: telegraphic, punchy sentences. Use real, well-known facts about the topic — do not invent specific numbers, statistics, dates, or quotes you aren't actually confident are true; describe uncertain specifics qualitatively instead of fabricating precision.
 - End the LAST item's narration with either a direct question to the viewer or a tease for the "next short" — this nudges comments, which is a strong engagement signal.
 - Everything in {lang} except proper nouns.
+- image_search must disambiguate country/context explicitly — a bare "Congress" or "parliament" matches stock footage from ANY country. Always include "India"/"Indian" plus the full proper name (e.g. "Rahul Gandhi Indian National Congress press conference India," not just "Congress protest").
 - CRITICAL: valid JSON only, no literal newlines inside string values.\
 """
 

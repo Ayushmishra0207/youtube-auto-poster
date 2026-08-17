@@ -20,7 +20,8 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from config import BASE_DIR, OUTPUT_DIR
+from config import BASE_DIR
+from pipeline.accounts import Account, get_account
 from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
 from pipeline.logger import log
 from pipeline.news_fetcher import get_breaking_headlines
@@ -38,11 +39,16 @@ _FOCUS_BY_FEED = {
     "sports": "Sports breaking news",
 }
 
-SHORT_LOCK_FILE = BASE_DIR / "short_generate.lock"
+def short_lock_file(account_id: str = "default") -> Path:
+    """Per-account Shorts generation lock. Scoped by account id so a Short
+    rendering for one channel doesn't block every other channel — the lock is
+    only there to stop two renders of the SAME account's output tree from
+    racing. Must stay in sync with api/main.py's _short_lock_file()."""
+    return BASE_DIR / f"short_generate_{account_id}.lock"
 
 
 def build_short_script(feed: str = "india", topic: str = "", locale: Locale | None = None,
-                        content_type: str = "news") -> dict:
+                        content_type: str = "news", account: "Account | None" = None) -> dict:
     """
     Generate a Shorts script from either a custom topic (creator's own
     choice of subject) or a real breaking-news feed. Shared by the
@@ -62,14 +68,14 @@ def build_short_script(feed: str = "india", topic: str = "", locale: Locale | No
     topic = (topic or "").strip()
     if topic:
         script = generate_shorts_script_from_topic(topic, locale=locale, content_type=content_type)
-        record_topic(script.get("title", ""))
+        record_topic(script.get("title", ""), namespace="shorts", base_dir=account.dir if account else None)
         return script
 
     headlines = get_breaking_headlines(feed, max_age_hours=48, limit=15, locale=locale)
     if len(headlines) < 3:
         raise ValueError(f"Only {len(headlines)} fresh headlines for feed '{feed}' (locale={locale.code})")
 
-    fresh = filter_fresh(headlines)
+    fresh = filter_fresh(headlines, namespace="shorts", base_dir=account.dir if account else None)
     if len(fresh) < 3:
         log.info("Shorts topic history filtered too aggressively (%d/%d left) — using full headline list",
                  len(fresh), len(headlines))
@@ -79,17 +85,10 @@ def build_short_script(feed: str = "india", topic: str = "", locale: Locale | No
         fresh,
         focus=_FOCUS_BY_FEED.get(feed, "India and world breaking news"),
         locale=locale,
-        avoid_titles=recent_titles(),
+        avoid_titles=recent_titles(namespace="shorts", base_dir=account.dir if account else None),
     )
-    record_topic(script.get("title", ""))
+    record_topic(script.get("title", ""), namespace="shorts", base_dir=account.dir if account else None)
     return script
-
-
-def _today_output_dir() -> Path:
-    date_str = datetime.now(IST).strftime("%Y-%m-%d")
-    d = Path(OUTPUT_DIR) / date_str
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def _next_short_index(base_dir: Path) -> int:
@@ -110,7 +109,7 @@ def _pid_running(pid: int) -> bool:
         return False
 
 
-def _try_create_lock() -> bool:
+def _try_create_lock(lock_file: Path) -> bool:
     """Atomically create the lock file with our PID. False if it already exists —
     O_CREAT|O_EXCL is a single kernel syscall, so two processes racing to create
     it can never both succeed (unlike a separate exists-check + write, which is
@@ -118,7 +117,7 @@ def _try_create_lock() -> bool:
     either had written its PID — the API's pre-spawn check alone can't close
     that window)."""
     try:
-        fd = os.open(str(SHORT_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
             f.write(str(os.getpid()))
         return True
@@ -126,25 +125,26 @@ def _try_create_lock() -> bool:
         return False
 
 
-def _acquire_lock() -> bool:
-    """Return True if the lock was acquired, False if another run is genuinely in progress."""
-    if _try_create_lock():
+def _acquire_lock(lock_file: Path) -> bool:
+    """Return True if the lock was acquired, False if another run for the same
+    account is genuinely in progress."""
+    if _try_create_lock(lock_file):
         return True
 
     try:
-        pid = int(SHORT_LOCK_FILE.read_text().strip())
+        pid = int(lock_file.read_text().strip())
         if _pid_running(pid):
             return False
-        log.info("Removing stale short_generate.lock (PID %d no longer running)", pid)
+        log.info("Removing stale %s (PID %d no longer running)", lock_file.name, pid)
     except Exception:
         pass
-    SHORT_LOCK_FILE.unlink(missing_ok=True)
+    lock_file.unlink(missing_ok=True)
 
-    return _try_create_lock()
+    return _try_create_lock(lock_file)
 
 
 def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale: Locale,
-                        content_type: str = "news") -> Path:
+                        content_type: str = "news", account: "Account | None" = None) -> Path:
     """Build, render, and save one Short into base_dir/short_NN. Returns work_dir."""
     work_dir = base_dir / f"short_{index:02d}"
     if work_dir.exists():
@@ -154,7 +154,7 @@ def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale
     source = f"topic='{topic}' (content_type={content_type})" if topic.strip() else f"feed={feed}"
     log.info("[manual-short %d] Generating (%s, locale=%s)...", index, source, locale.code)
 
-    script = build_short_script(feed=feed, topic=topic, locale=locale, content_type=content_type)
+    script = build_short_script(feed=feed, topic=topic, locale=locale, content_type=content_type, account=account)
     script["_locale"] = locale.code
     script["_content_type"] = content_type
     with open(work_dir / "script.json", "w", encoding="utf-8") as f:
@@ -179,26 +179,35 @@ def main():
                         help="Locale code for language/tags/TTS/rendering (pipeline/locales.py); default hi")
     parser.add_argument("--count", type=int, default=1,
                         help="Number of Shorts to generate in this run (ignored when --index is set)")
+    parser.add_argument("--account", default="default", help="Account id")
     args = parser.parse_args()
 
     locale = get_locale(args.locale)
 
-    if not _acquire_lock():
-        log.warning("[manual-short] Another Short generation is already in progress — aborting this run.")
+    account = get_account(args.account)
+    if not account:
+        log.error("Unknown account '%s'", args.account)
+        sys.exit(1)
+
+    lock_file = short_lock_file(account.id)
+    if not _acquire_lock(lock_file):
+        log.warning("[manual-short] Another Short generation is already in progress for account '%s' "
+                    "— aborting this run.", account.id)
         sys.exit(1)
     try:
-        base_dir = (Path(OUTPUT_DIR) / args.date) if args.date else _today_output_dir()
+        account_output_dir = account.output_dir
+        base_dir = (account_output_dir / args.date) if args.date else (account_output_dir / datetime.now(IST).strftime("%Y-%m-%d"))
         base_dir.mkdir(parents=True, exist_ok=True)
 
         if args.index > 0:
-            generate_one_short(base_dir, args.feed, args.topic, args.index, locale, content_type=args.content_type)
+            generate_one_short(base_dir, args.feed, args.topic, args.index, locale, content_type=args.content_type, account=account)
         else:
             count = max(1, args.count)
             failures = 0
             for _ in range(count):
                 index = _next_short_index(base_dir)
                 try:
-                    generate_one_short(base_dir, args.feed, args.topic, index, locale, content_type=args.content_type)
+                    generate_one_short(base_dir, args.feed, args.topic, index, locale, content_type=args.content_type, account=account)
                 except Exception as exc:
                     failures += 1
                     log.error("[manual-short %d] Failed: %s", index, exc, exc_info=True)
@@ -209,7 +218,7 @@ def main():
         log.error("[manual-short] Failed: %s", exc, exc_info=True)
         sys.exit(1)
     finally:
-        SHORT_LOCK_FILE.unlink(missing_ok=True)
+        lock_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,11 @@ Fetch trending / most-searched topics for the active locale's region.
 
 Strategy:
   1. Google Trends real-time trending searches (locale.trends_pn)
-  2. YouTube trending videos (requires YouTube API key)
+  2. YouTube trending videos (get_youtube_trending_topics, optionally
+     filtered to one YouTube category — a stronger signal than Google
+     Trends for "what's actually getting watched/pushed on YouTube right
+     now" in that specific vertical, since Google Trends is generic web
+     search interest and doesn't know what YouTube's own algorithm favors)
   3. Hard-coded evergreen fallback if both fail
 
 Topic strings here are just research subjects fed into generate_script() —
@@ -12,12 +16,31 @@ LLM writes the final script in the target language regardless of what
 language the topic string itself is in.
 """
 import random
-import requests
+import re
 from typing import List
 
 from pytrends.request import TrendReq
 
 from pipeline.locales import Locale, get_locale
+
+# A lot of real trending-video titles are emoji/hashtag reaction noise
+# ("😤...#shorts") that makes a poor script topic even though the video
+# itself is genuinely trending — strip that noise and reject anything with
+# too little real text left, rather than feeding it straight to the LLM.
+_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000026FF\U00002700-\U000027BF\U0001F1E6-\U0001F1FF]+"
+)
+_HASHTAG_RE = re.compile(r"#\S+")
+
+
+def _clean_trending_title(title: str) -> str | None:
+    """Strip emoji/hashtags from a raw trending-video title; None if too
+    little real informative text remains to be a usable topic."""
+    cleaned = _HASHTAG_RE.sub("", title)
+    cleaned = _EMOJI_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -|:")
+    words = [w for w in re.findall(r"[\wऀ-ॿ]+", cleaned) if len(w) > 2]
+    return cleaned if len(words) >= 3 else None
 
 
 def get_trending_topics(num: int = 7, locale: Locale | None = None) -> List[str]:
@@ -52,26 +75,44 @@ def _from_google_trends(num: int, locale: Locale) -> List[str]:
         return []
 
 
-def _from_youtube_trending(api_key: str, num: int = 7, locale: Locale | None = None) -> List[str]:
-    """Extract topics from YouTube trending videos (optional, call manually)."""
+def get_youtube_trending_topics(num: int = 5, locale: Locale | None = None,
+                                video_category_id: str | None = None) -> List[str]:
+    """
+    Real YouTube trending-video titles for the locale's region, optionally
+    filtered to one YouTube category (e.g. "17" for Sports, "28" for
+    Science & Tech — see topic_config.json's yt_category_id per category).
+    Reuses the uploader's existing OAuth credentials (pipeline/uploader.py)
+    instead of needing a separate API key — videos.list with chart=mostPopular
+    is a public read endpoint, so the broad `youtube` scope already granted
+    covers it.
+
+    Not every category has trending-chart data for every region — an empty
+    result here is expected and normal, not an error; callers should fall
+    back to Google Trends / fallback_topics.
+    """
     locale = locale or get_locale(None)
     try:
-        resp = requests.get(
-            "https://www.googleapis.com/youtube/v3/videos",
-            params={
-                "part": "snippet",
-                "chart": "mostPopular",
-                "regionCode": locale.news_gl,
-                "maxResults": num,
-                "key": api_key,
-            },
-            timeout=10,
+        from pipeline.uploader import _get_service
+        svc = _get_service()
+        params = {
+            "part": "snippet",
+            "chart": "mostPopular",
+            "regionCode": locale.news_gl,
+            # Over-fetch — _clean_trending_title rejects pure emoji/hashtag
+            # noise, so pull more raw results than needed to still have `num`
+            # usable topics left after cleaning.
+            "maxResults": min(max(num * 3, 10), 50),
+        }
+        if video_category_id:
+            params["videoCategoryId"] = video_category_id
+        resp = svc.videos().list(**params).execute()
+        cleaned = (
+            _clean_trending_title(item.get("snippet", {}).get("title", ""))
+            for item in resp.get("items", [])
         )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        return [item["snippet"]["title"] for item in items]
+        return [t for t in cleaned if t][:num]
     except Exception as e:
-        print(f"  [warn]  YouTube Trending failed for {locale.code}: {e}")
+        print(f"  [warn]  YouTube Trending failed for {locale.code} (category={video_category_id}): {e}")
         return []
 
 

@@ -16,7 +16,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import BASE_DIR, ENGAGEMENT_AUTO_COMMENT, ENGAGEMENT_MAX_DRAFTS, OUTPUT_DIR
+from config import BASE_DIR, ENGAGEMENT_AUTO_COMMENT, ENGAGEMENT_MAX_DRAFTS
+from pipeline.accounts import enabled_accounts
 from pipeline.locales import get_locale
 from pipeline.logger import log
 from pipeline.uploader import post_engagement_comment
@@ -38,21 +39,34 @@ def _save_state(state: dict) -> None:
 
 
 def _iter_uploaded_items():
-    """Yield (kind, key, item_dir) for every video_NN/short_NN dir with a real youtube_id.txt."""
-    out = Path(OUTPUT_DIR)
-    if not out.exists():
-        return
-    for date_dir in sorted(p for p in out.iterdir() if p.is_dir()):
-        for item_dir in sorted(p for p in date_dir.iterdir() if p.is_dir()):
-            if not (item_dir / "youtube_id.txt").exists():
-                continue
-            if item_dir.name.startswith("video_"):
-                kind = "video"
-            elif item_dir.name.startswith("short_"):
-                kind = "short"
-            else:
-                continue
-            yield kind, f"{date_dir.name}/{item_dir.name}", item_dir
+    """
+    Yield (kind, key, item_dir, account) for every video_NN/short_NN dir with
+    a real youtube_id.txt, across every enabled account.
+
+    Renders live at output/<account_id>/<date>/<item> since the multi-account
+    restructure. Walking OUTPUT_DIR/<date> directly (as this did) resolved the
+    account directories as if they were date directories, found no
+    youtube_id.txt one level down, and silently yielded nothing at all — this
+    whole automation had gone quiet with no error.
+
+    `key` is account-scoped ("<account_id>/<date>/<item>") so two accounts'
+    identically-named slots can't collide in the commented/draft state.
+    """
+    for account in enabled_accounts():
+        out = Path(account.output_dir)
+        if not out.exists():
+            continue
+        for date_dir in sorted(p for p in out.iterdir() if p.is_dir()):
+            for item_dir in sorted(p for p in date_dir.iterdir() if p.is_dir()):
+                if not (item_dir / "youtube_id.txt").exists():
+                    continue
+                if item_dir.name.startswith("video_"):
+                    kind = "video"
+                elif item_dir.name.startswith("short_"):
+                    kind = "short"
+                else:
+                    continue
+                yield kind, f"{account.id}/{date_dir.name}/{item_dir.name}", item_dir, account
 
 
 def _read_script(item_dir: Path) -> dict:
@@ -73,12 +87,16 @@ def run_engagement_pass() -> dict:
     posted_now = 0
     latest = None  # (kind, key, item_dir, script) — most recent upload seen this pass
 
-    for kind, key, item_dir in _iter_uploaded_items():
+    for kind, key, item_dir, account in _iter_uploaded_items():
         script = _read_script(item_dir)
         locale = get_locale(script.get("_locale") or "hi")
         latest = (kind, key, item_dir, script)
 
-        if key in commented:
+        # Pre-multi-account state recorded keys as "<date>/<item>"; honour
+        # those too so the switch to account-scoped keys doesn't re-comment
+        # every video that was already commented on before the migration.
+        legacy_key = key.split("/", 1)[1]
+        if key in commented or legacy_key in commented:
             continue
         if not ENGAGEMENT_AUTO_COMMENT:
             continue
@@ -88,7 +106,10 @@ def run_engagement_pass() -> dict:
             continue
 
         comment_text = f"{locale.like_share_cta} \U0001F4AC"  # speech-balloon emoji
-        if post_engagement_comment(yt_id, comment_text):
+        # Comment as the account that owns the video, not always the default
+        # channel — a cross-account comment would post under the wrong
+        # identity (or fail outright).
+        if post_engagement_comment(yt_id, comment_text, token_file=account.token_file):
             commented.add(key)
             posted_now += 1
 

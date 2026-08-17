@@ -47,10 +47,12 @@ def _is_quota_error(exc: Exception) -> bool:
 def generate_image(
     prompt: str,
     output_path: str,
+    aspect_ratio: str = "16:9",
 ) -> str | None:
     """
     Generate one image for `prompt` using Imagen 3 and save to output_path.
-    Returns the saved path on success, None on any failure.
+    aspect_ratio: "16:9" for long-form section backgrounds, "9:16" for
+    vertical Shorts. Returns the saved path on success, None on any failure.
     """
     global _quota_exhausted
 
@@ -68,7 +70,7 @@ def generate_image(
             prompt=full_prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
-                aspect_ratio="16:9",
+                aspect_ratio=aspect_ratio,
                 safety_filter_level="BLOCK_LOW_AND_ABOVE",
             ),
         )
