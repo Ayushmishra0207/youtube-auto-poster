@@ -408,7 +408,7 @@ export default function ShortsPanel() {
     setShorts(r.shorts);
     setIsGenerating(r.is_generating);
     setLoading(false);
-  });
+  }).catch(() => {});
 
   useEffect(() => {
     setLoading(true);

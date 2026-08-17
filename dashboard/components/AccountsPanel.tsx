@@ -17,10 +17,10 @@ export default function AccountsPanel() {
 
   const load = () => {
     setLoading(true);
-    api.listAccounts().then((data) => {
-      setAccounts(data.accounts || []);
-      setLoading(false);
-    });
+    api.listAccounts()
+      .then((data) => setAccounts(data.accounts || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, []);

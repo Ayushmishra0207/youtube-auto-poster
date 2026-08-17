@@ -71,7 +71,7 @@ export default function SettingsPanel() {
         PEXELS_API_KEY: s.PEXELS_API_KEY,
         KEEP_OUTPUT_DAYS: s.KEEP_OUTPUT_DAYS,
       });
-    });
+    }).catch(() => {});
   }, []);
 
   const handleSave = async () => {

@@ -199,8 +199,8 @@ export default function VideoGrid() {
 
   useEffect(() => {
     setLoading(true);
-    api.videos(undefined, accountId).then((r: any) => { setVideos(r.videos); setLoading(false); });
-    const id = setInterval(() => api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)), 10000);
+    api.videos(undefined, accountId).then((r: any) => { setVideos(r.videos); setLoading(false); }).catch(() => setLoading(false));
+    const id = setInterval(() => api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)).catch(() => {}), 10000);
     return () => clearInterval(id);
   }, [accountId]);
 

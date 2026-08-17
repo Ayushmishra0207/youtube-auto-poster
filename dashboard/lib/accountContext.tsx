@@ -24,7 +24,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    api.listAccounts().then((data) => setAccounts(data.accounts || []));
+    api.listAccounts().then((data) => setAccounts(data.accounts || [])).catch(() => {});
   }, []);
 
   const setAccountId = (id: string) => {

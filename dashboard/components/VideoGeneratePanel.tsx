@@ -17,7 +17,7 @@ export default function VideoGeneratePanel() {
       setCategories(cfg.categories || {});
       const keys = Object.keys(cfg.categories || {});
       if (keys.length) setCategory(keys[0]);
-    });
+    }).catch(() => {});
   }, [accountId]);
 
   // Fire-and-forget: the backend spawns generate_video_now.py and answers

@@ -17,7 +17,7 @@ import SettingsPanel from "@/components/SettingsPanel";
 import UploadPanel from "@/components/UploadPanel";
 import AccountsPanel from "@/components/AccountsPanel";
 import LoginScreen from "@/components/LoginScreen";
-import { api, clearToken, getToken } from "@/lib/api";
+import { api, clearToken, getToken, onAuthExpired } from "@/lib/api";
 
 export type Tab = "overview" | "analytics" | "topics" | "videos" | "shorts" | "instagram" | "upload" | "logs" | "schedule" | "accounts" | "settings";
 
@@ -37,6 +37,11 @@ export default function Dashboard() {
       .catch(() => clearToken())
       .finally(() => setAuthChecked(true));
   }, []);
+
+  // Any API call coming back 401 (e.g. the API server restarted and its
+  // in-memory sessions were wiped) bounces back to the login screen
+  // instead of leaving an uncaught AuthError to crash the app.
+  useEffect(() => onAuthExpired(() => setLoggedIn(false)), []);
 
   const selectTab = (t: Tab) => {
     setTab(t);

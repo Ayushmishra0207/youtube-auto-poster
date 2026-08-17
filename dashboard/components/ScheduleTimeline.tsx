@@ -13,8 +13,8 @@ export default function ScheduleTimeline() {
   const [videos, setVideos] = useState<VideoMeta[]>([]);
 
   useEffect(() => {
-    api.videos(undefined, accountId).then((r: any) => setVideos(r.videos));
-    const id = setInterval(() => api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)), 10000);
+    api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)).catch(() => {});
+    const id = setInterval(() => api.videos(undefined, accountId).then((r: any) => setVideos(r.videos)).catch(() => {}), 10000);
     return () => clearInterval(id);
   }, [accountId]);
 

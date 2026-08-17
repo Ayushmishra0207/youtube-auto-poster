@@ -26,6 +26,23 @@ export function clearToken(): void {
 
 export class AuthError extends Error {}
 
+// Fired whenever a request comes back 401 — e.g. the API server restarted
+// and its in-memory sessions were wiped. `page.tsx` listens for this and
+// bounces back to the login screen instead of leaving an uncaught
+// AuthError to crash the app.
+const AUTH_EXPIRED_EVENT = "auth-expired";
+
+function handleAuthExpired(): void {
+  clearToken();
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+}
+
+export function onAuthExpired(handler: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(AUTH_EXPIRED_EVENT, handler);
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
+}
+
 // For plain <img>/<video> tags, which can't set custom headers — the
 // backend accepts the session token as a "token" query param fallback
 // (see api/main.py's _session_token_from_request).
@@ -55,7 +72,7 @@ function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Respo
 }
 
 async function unwrap<T>(res: Response, label: string): Promise<T> {
-  if (res.status === 401) throw new AuthError("Not authenticated");
+  if (res.status === 401) { handleAuthExpired(); throw new AuthError("Not authenticated"); }
   if (!res.ok) {
     // Surface the backend's actual error text (FastAPI's {detail: "..."} body
     // shape, or any other JSON/plain-text error) instead of just the bare
