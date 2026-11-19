@@ -10,6 +10,8 @@ output/
 logs/
 pipeline.lock
 short_generate.lock
+instagram_queue.lock
+*.lock.stale-*
 engagement_state.json
 instagram_queue.json
 shorts_topic_history.json

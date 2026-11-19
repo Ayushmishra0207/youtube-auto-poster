@@ -87,11 +87,15 @@ def generate_section_voices(sections: list, output_dir: str, rate: str | None = 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     paths = []
 
-    for section in sections:
-        sid = section["id"]
+    # Files are named by position: LLM fallbacks sometimes return "id": "1" (str),
+    # duplicate ids, or no id at all — section["id"] + :02d crashed the whole video.
+    for sid, section in enumerate(sections, start=1):
         path = os.path.join(output_dir, f"voice_{sid:02d}.mp3")
         try:
-            text_to_speech(section["narration"], path, rate=rate, locale=locale)
+            narration = (section.get("narration") or "").strip()
+            if not narration:
+                raise ValueError("section has no narration text")
+            text_to_speech(narration, path, rate=rate, locale=locale)
             paths.append(path)
             log.info("Voice %02d saved → %s", sid, Path(path).name)
         except Exception as exc:

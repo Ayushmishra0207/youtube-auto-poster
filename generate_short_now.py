@@ -12,7 +12,6 @@ Usage:
 """
 import argparse
 import json
-import os
 import shutil
 import sys
 from datetime import datetime, timedelta, timezone
@@ -22,6 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config import BASE_DIR, OUTPUT_DIR
 from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
+from pipeline import locking
 from pipeline.logger import log
 from pipeline.news_fetcher import get_breaking_headlines
 from pipeline.script_generator import generate_shorts_script, generate_shorts_script_from_topic
@@ -97,50 +97,11 @@ def _next_short_index(base_dir: Path) -> int:
     return (max(existing) + 1) if existing else 1
 
 
-def _pid_running(pid: int) -> bool:
-    """Return True if the given PID is alive (Windows-compatible)."""
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["tasklist", "/fi", f"PID eq {pid}", "/nh"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return str(pid) in r.stdout
-    except Exception:
-        return False
-
-
-def _try_create_lock() -> bool:
-    """Atomically create the lock file with our PID. False if it already exists —
-    O_CREAT|O_EXCL is a single kernel syscall, so two processes racing to create
-    it can never both succeed (unlike a separate exists-check + write, which is
-    exactly what let two 'Generate Short' clicks both spawn a render before
-    either had written its PID — the API's pre-spawn check alone can't close
-    that window)."""
-    try:
-        fd = os.open(str(SHORT_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w") as f:
-            f.write(str(os.getpid()))
-        return True
-    except FileExistsError:
-        return False
-
-
 def _acquire_lock() -> bool:
-    """Return True if the lock was acquired, False if another run is genuinely in progress."""
-    if _try_create_lock():
-        return True
-
-    try:
-        pid = int(SHORT_LOCK_FILE.read_text().strip())
-        if _pid_running(pid):
-            return False
-        log.info("Removing stale short_generate.lock (PID %d no longer running)", pid)
-    except Exception:
-        pass
-    SHORT_LOCK_FILE.unlink(missing_ok=True)
-
-    return _try_create_lock()
+    """Return True if the lock was acquired, False if another run is genuinely in progress.
+    Shared implementation (pipeline/locking.py) also works on Linux/Render, where the
+    old tasklist-only PID check treated every lock as stale."""
+    return locking.acquire(SHORT_LOCK_FILE)
 
 
 def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale: Locale,
@@ -209,7 +170,7 @@ def main():
         log.error("[manual-short] Failed: %s", exc, exc_info=True)
         sys.exit(1)
     finally:
-        SHORT_LOCK_FILE.unlink(missing_ok=True)
+        locking.release(SHORT_LOCK_FILE)
 
 
 if __name__ == "__main__":

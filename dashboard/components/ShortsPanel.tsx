@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, authedMediaUrl, authHeaders } from "@/lib/api";
+import { api, authedMediaUrl, longRequest } from "@/lib/api";
 import type { ShortMeta } from "@/lib/types";
+import RegenerateButton from "@/components/RegenerateButton";
 import { Play, X, Upload, ExternalLink, CheckCircle, Sparkles, Newspaper, Globe2, TrendingUp, ChevronDown, Check } from "lucide-react";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface ContentType {
   label: string;
@@ -147,9 +147,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/shorts/upload/${short.date}/${short.index}`, { method: "POST", headers: authHeaders() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Upload failed");
+      const data = await longRequest(`/api/shorts/upload/${short.date}/${short.index}`, { method: "POST" });
       onUploaded(short.index, data.video_id, data.url);
     } catch (e: any) {
       setErr(e.message || "Upload failed");
@@ -205,14 +203,20 @@ function UploadButton({
   );
 }
 
+type ShortSource = { feed: "india" | "world" | "business"; topic: string; contentType: string };
+
 function ShortCard({
   short,
   onPlay,
   onUploaded,
+  source,
+  onRegenerating,
 }: {
   short: ShortMeta;
   onPlay: (s: ShortMeta) => void;
   onUploaded: (index: number, videoId: string, url: string) => void;
+  source: ShortSource;
+  onRegenerating: () => void;
 }) {
   return (
     <div className="glass glass-hover rounded-2xl overflow-hidden transition-all duration-200 group flex flex-col">
@@ -271,18 +275,34 @@ function ShortCard({
           <StatusBadge status={short.status} />
         </div>
         <span className="text-xs font-mono" style={{ color: "#64748b" }}>#{short.index}</span>
-        <div className="mt-auto pt-2">
+        <div className="mt-auto pt-2 space-y-1.5">
           <UploadButton short={short} onUploaded={onUploaded} />
+          {short.status !== "uploaded" && (
+            <RegenerateButton
+              isRegenerating={short.is_regenerating}
+              start={() => api.regenerateShort(short.date, short.index, source.feed, source.topic.trim(), source.contentType)}
+              title={`Regenerate using ${source.topic.trim() ? `topic "${source.topic.trim()}"` : `the ${source.feed} feed`} (set in "Generate a Short now")`}
+              onStarted={onRegenerating}
+            />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function GeneratePanel({ onGenerated }: { onGenerated: () => void }) {
-  const [feed, setFeed]           = useState<"india" | "world" | "business">("india");
-  const [customTopic, setCustomTopic] = useState("");
-  const [contentType, setContentType] = useState("news");
+function GeneratePanel({
+  onGenerated, source, setSource,
+}: {
+  onGenerated: () => void;
+  source: ShortSource;
+  setSource: (s: ShortSource) => void;
+}) {
+  // Lifted to ShortsPanel so each card's Regenerate button reuses this choice
+  const { feed, topic: customTopic, contentType } = source;
+  const setFeed = (f: ShortSource["feed"]) => setSource({ ...source, feed: f });
+  const setCustomTopic = (t: string) => setSource({ ...source, topic: t });
+  const setContentType = (c: string) => setSource({ ...source, contentType: c });
   const [generating, setGenerating] = useState(false);
   const [msg, setMsg]             = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -383,12 +403,16 @@ export default function ShortsPanel() {
   const [playing, setPlaying]     = useState<ShortMeta | null>(null);
   const [loading, setLoading]     = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [source, setSource]       = useState<ShortSource>({ feed: "india", topic: "", contentType: "news" });
 
-  const refresh = () => api.shorts().then((r: any) => {
-    setShorts(r.shorts);
-    setIsGenerating(r.is_generating);
-    setLoading(false);
-  });
+  // Errors (e.g. Render cold start > 20 s timeout) must not leave the spinner up forever
+  const refresh = () => api.shorts()
+    .then((r: any) => {
+      setShorts(r.shorts);
+      setIsGenerating(r.is_generating);
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false));
 
   useEffect(() => {
     refresh();
@@ -423,7 +447,7 @@ export default function ShortsPanel() {
         </p>
       </div>
 
-      <GeneratePanel onGenerated={refresh} />
+      <GeneratePanel onGenerated={refresh} source={source} setSource={setSource} />
 
       {shorts.length === 0 ? (
         <div
@@ -438,7 +462,8 @@ export default function ShortsPanel() {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {shorts.map((s) => (
-            <ShortCard key={s.index} short={s} onPlay={setPlaying} onUploaded={handleUploaded} />
+            <ShortCard key={s.index} short={s} onPlay={setPlaying} onUploaded={handleUploaded}
+                       source={source} onRegenerating={refresh} />
           ))}
         </div>
       )}

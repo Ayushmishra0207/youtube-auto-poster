@@ -4,10 +4,10 @@ import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, ListTodo, Film, ScrollText,
   CalendarClock, Settings, Zap, BarChart2, PlaySquare,
-  Upload, Target, X, Sparkles, Instagram,
+  Upload, Target, X, Sparkles, Instagram, Scissors, LogOut,
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { api } from "@/lib/api";
+import { api, AUTH_EXPIRED_EVENT, clearToken } from "@/lib/api";
 
 const DEADLINE = new Date("2026-05-19T00:00:00+05:30"); // IST
 const TOTAL_DAYS = 30;
@@ -38,6 +38,7 @@ const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "topics",     label: "Topics",     icon: <ListTodo size={18} /> },
   { id: "videos",     label: "Videos",     icon: <Film size={18} /> },
   { id: "shorts",     label: "Shorts",     icon: <Sparkles size={18} /> },
+  { id: "clips",      label: "Clip Maker", icon: <Scissors size={18} /> },
   { id: "instagram",  label: "Instagram",  icon: <Instagram size={18} /> },
   { id: "upload",     label: "Upload",     icon: <Upload size={18} /> },
   { id: "logs",       label: "Logs",       icon: <ScrollText size={18} /> },
@@ -45,8 +46,24 @@ const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "settings",   label: "Settings",   icon: <Settings size={18} /> },
 ];
 
-function MonetizationFooter() {
+function MonetizationFooter({ uploadWindow }: { uploadWindow: string }) {
   const { days, hours, minutes, seconds, pct } = useCountdown();
+
+  // After the deadline the countdown is meaningless (it sat on a red 0d 00h forever) — show just the goal
+  if (Date.now() >= DEADLINE.getTime()) {
+    return (
+      <div className="mx-3 mb-3 rounded-xl p-3 space-y-1"
+           style={{ background: "rgba(79,195,247,0.06)", border: "1px solid rgba(79,195,247,0.2)" }}>
+        <div className="flex items-center gap-1.5">
+          <Target size={12} style={{ color: "#4FC3F7" }} />
+          <p className="text-xs font-semibold" style={{ color: "#4FC3F7" }}>Monetization goal</p>
+        </div>
+        <p className="text-[10px]" style={{ color: "var(--muted)" }}>1,000 subs · 4,000 watch hrs</p>
+        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 14:30 IST · Upload {uploadWindow}</p>
+      </div>
+    );
+  }
+
   const urgent = days < 7;
   const warn   = days < 15;
   const accent = urgent ? "#f87171" : warn ? "#fbbf24" : "#4FC3F7";
@@ -93,7 +110,7 @@ function MonetizationFooter() {
       {/* Targets */}
       <div className="pt-0.5 space-y-0.5">
         <p className="text-[10px]" style={{ color: "var(--muted)" }}>Need: 1,000 subs · 4,000 watch hrs</p>
-        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 14:30 IST · Upload 18:30–19:30</p>
+        <p className="text-[10px]" style={{ color: "var(--muted)" }}>Pipeline at 14:30 IST · Upload {uploadWindow}</p>
       </div>
     </div>
   );
@@ -109,12 +126,21 @@ export default function Sidebar({
   const [running, setRunning] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [runMsg, setRunMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [uploadWindow, setUploadWindow] = useState("18:30 – 19:40 IST");
+
+  const signOut = () => {
+    api.logout().catch(() => {}).finally(() => {
+      clearToken();
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    });
+  };
 
   useEffect(() => {
     const poll = async () => {
       try {
         const s: any = await api.status();
         setRunning(s.is_running);
+        if (s.upload_window) setUploadWindow(s.upload_window);
       } catch {}
     };
     poll();
@@ -219,8 +245,16 @@ export default function Sidebar({
         })}
       </nav>
 
+      <button
+        onClick={signOut}
+        className="mx-3 mb-2 flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors hover:bg-white/5"
+        style={{ color: "#64748b" }}
+      >
+        <LogOut size={14} /> Sign out
+      </button>
+
       {/* Monetization countdown footer */}
-      <MonetizationFooter />
+      <MonetizationFooter uploadWindow={uploadWindow} />
     </aside>
   );
 }

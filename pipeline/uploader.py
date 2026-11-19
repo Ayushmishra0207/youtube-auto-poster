@@ -32,7 +32,12 @@ from config import (
     YT_MADE_FOR_KIDS,
 )
 from pipeline.logger import log
-from pipeline.text_utils import safe_truncate
+from pipeline.text_utils import (
+    YT_DESCRIPTION_MAX_BYTES,
+    fit_youtube_tags,
+    fit_youtube_text,
+    safe_truncate,
+)
 
 # youtube scope is a superset of youtube.upload and also allows thumbnail management.
 # yt-analytics.readonly enables watch-hours/Shorts-views queries for monetization tracking.
@@ -49,6 +54,14 @@ SCOPES = [
 
 def _get_service():
     creds = None
+
+    # Cloud (Render): the token arrives as YOUTUBE_TOKEN_B64 — previously only the
+    # API's own helper decoded it, so a pipeline run on a fresh instance fell
+    # through to the browser OAuth flow and every upload failed.
+    if not os.path.exists(YOUTUBE_TOKEN_FILE) and os.environ.get("YOUTUBE_TOKEN_B64"):
+        import base64
+        with open(YOUTUBE_TOKEN_FILE, "wb") as f:
+            f.write(base64.b64decode(os.environ["YOUTUBE_TOKEN_B64"]))
 
     if os.path.exists(YOUTUBE_TOKEN_FILE):
         with open(YOUTUBE_TOKEN_FILE, "rb") as f:
@@ -102,9 +115,9 @@ def upload_video(
 
     body = {
         "snippet": {
-            "title":                safe_truncate(title, 100),
-            "description":          description[:5000],
-            "tags":                 [str(t)[:500] for t in tags[:500]],
+            "title":                safe_truncate((title or "").replace("<", "‹").replace(">", "›"), 100),
+            "description":          fit_youtube_text(description, YT_DESCRIPTION_MAX_BYTES),
+            "tags":                 fit_youtube_tags(tags),
             "categoryId":           category_id,
             "defaultLanguage":      yt_language,
             "defaultAudioLanguage": yt_language,
@@ -116,8 +129,10 @@ def upload_video(
         },
     }
 
+    # 10 MB chunks + num_retries: one transient socket error / 5xx used to abort
+    # the whole single-request upload and lose that day's video.
     media = MediaFileUpload(
-        video_path, mimetype="video/mp4", chunksize=-1, resumable=True
+        video_path, mimetype="video/mp4", chunksize=10 * 1024 * 1024, resumable=True
     )
     request = svc.videos().insert(
         part=",".join(body.keys()), body=body, media_body=media
@@ -125,7 +140,7 @@ def upload_video(
 
     response = None
     while response is None:
-        status, response = request.next_chunk()
+        status, response = request.next_chunk(num_retries=5)
         if status:
             pct = int(status.progress() * 100)
             log.info("Upload progress: %d%%", pct)

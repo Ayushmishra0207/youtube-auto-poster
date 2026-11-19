@@ -62,8 +62,10 @@ export default function SettingsPanel() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
+  const load = () => {
+    setError("");
     api.settings().then((s: any) => {
       setSettings(s);
       setForm({
@@ -71,11 +73,14 @@ export default function SettingsPanel() {
         PEXELS_API_KEY: s.PEXELS_API_KEY,
         KEEP_OUTPUT_DAYS: s.KEEP_OUTPUT_DAYS,
       });
-    });
-  }, []);
+    }).catch(() => setError("Couldn't load settings from the API."));
+  };
+
+  useEffect(load, []);
 
   const handleSave = async () => {
     setSaving(true);
+    setError("");
     try {
       const updates: Record<string, string> = {};
       for (const [k, v] of Object.entries(form)) {
@@ -84,10 +89,23 @@ export default function SettingsPanel() {
       await api.saveSettings(updates);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+    } catch {
+      setError("Save failed — nothing was changed. Try again.");
     } finally {
       setSaving(false);
     }
   };
+
+  if (!settings && error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <p className="text-sm text-red-400">{error}</p>
+        <button onClick={load} className="px-3 py-1.5 rounded-lg text-xs glass glass-hover" style={{ color: "#4FC3F7" }}>
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (!settings) {
     return (
@@ -166,6 +184,7 @@ export default function SettingsPanel() {
         <Save size={14} />
         {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
       </button>
+      {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
   );
 }

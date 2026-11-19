@@ -39,6 +39,7 @@ from config import ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, OPENRO
 from pipeline.locales import Locale, get_locale
 from pipeline.logger import log
 from pipeline.retry import with_retry
+from pipeline.text_utils import yt_tag_cost
 
 _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 _gemini_client = None
@@ -215,7 +216,8 @@ def _enrich_metadata(script: dict, is_short: bool = False, locale: Locale | None
     for tag in deduped:
         if len(final_tags) >= max_tags:
             break
-        added_chars = len(tag) + (1 if final_tags else 0)  # +1 for comma join
+        # +1 for comma join; multi-word tags count as quoted (+2) by YouTube
+        added_chars = yt_tag_cost(tag) + (1 if final_tags else 0)
         if total_chars + added_chars > _MAX_TAG_CHARS:
             break
         final_tags.append(tag)
@@ -243,6 +245,13 @@ def _parse_script_response(raw: str, topic: str, source: str, required_key: str 
 
     try:
         script = json.loads(clean)
+        # Valid JSON with the wrong shape (e.g. {"script": {...}} or no "sections")
+        # must fail here so the retry/provider-fallback chain runs, instead of
+        # "succeeding" and crashing later with KeyError and losing the video.
+        if not isinstance(script, dict) or not script.get(required_key):
+            raise ValueError(
+                f"{source} response for topic '{topic}' is missing a non-empty '{required_key}'"
+            )
     except json.JSONDecodeError:
         # json_repair handles missing commas, trailing commas, unescaped quotes, etc.
         try:

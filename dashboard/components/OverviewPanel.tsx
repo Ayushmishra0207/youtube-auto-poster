@@ -174,8 +174,8 @@ export default function OverviewPanel() {
         <StatCard
           icon={<Activity size={18} />}
           label="Upload window"
-          value="18:30–19:30"
-          sub="IST, 7 slots × 10 min"
+          value={(status.upload_window || "18:30 – 19:40 IST").replace(/\s*IST$/, "")}
+          sub={`IST, ${status.total_slots ?? 8} slots × 10 min`}
         />
         <StatCard
           icon={<CheckCircle size={18} />}

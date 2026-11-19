@@ -64,14 +64,16 @@ export default function MobileHeader({ onMenuClick }: { onMenuClick?: () => void
         <span className="text-sm font-bold text-white">Auto-Poster</span>
       </div>
 
-      {/* Countdown chip */}
-      <div
-        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
-        style={{ background: `rgba(${urgent?"239,68,68":warn?"251,191,36":"79,195,247"},0.12)`, color: accent }}
-      >
-        <Target size={10} />
-        {daysLeft}d left
-      </div>
+      {/* Countdown chip — hidden once the deadline has passed (was stuck on a red "0d left") */}
+      {daysLeft > 0 ? (
+        <div
+          className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
+          style={{ background: `rgba(${urgent?"239,68,68":warn?"251,191,36":"79,195,247"},0.12)`, color: accent }}
+        >
+          <Target size={10} />
+          {daysLeft}d left
+        </div>
+      ) : <span />}
 
       {/* Run Now */}
       <button

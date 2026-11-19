@@ -21,11 +21,17 @@ function StatusBadge({ status }: { status: InstagramPost["status"] }) {
 
 function PostCard({ post, onRetried }: { post: InstagramPost; onRetried: () => void }) {
   const [retrying, setRetrying] = useState(false);
+  const [retryErr, setRetryErr] = useState("");
 
   const handleRetry = async () => {
     setRetrying(true);
+    setRetryErr("");
     try {
       await api.retryInstagramPost(post.id);
+      onRetried();
+    } catch {
+      // e.g. 404 when the background loop already retried it
+      setRetryErr("Retry failed — refresh the list and check the post's status.");
       onRetried();
     } finally {
       setRetrying(false);
@@ -55,6 +61,7 @@ function PostCard({ post, onRetried }: { post: InstagramPost; onRetried: () => v
           {retrying ? "Retrying…" : "Retry"}
         </button>
       )}
+      {retryErr && <p className="text-[10px] text-red-400">{retryErr}</p>}
     </div>
   );
 }
@@ -84,8 +91,8 @@ export default function InstagramPanel() {
       const res = await api.runInstagramNow();
       setMsg({ text: `Pass complete — ${res.posted} posted, ${res.failed} failed.`, ok: true });
       refresh();
-    } catch {
-      setMsg({ text: "Failed to reach API", ok: false });
+    } catch (e: any) {
+      setMsg({ text: e?.message || "Failed to reach API", ok: false });
     } finally {
       setRunning(false);
     }

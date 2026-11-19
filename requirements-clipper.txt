@@ -1,0 +1,12 @@
+# Viral Clip Maker (clipper/, clip_now.py) — install on the machine that renders clips:
+#   pip install -r requirements.txt -r requirements-clipper.txt
+#
+# Deliberately NOT part of requirements.txt: Whisper + video rendering need far
+# more than Render's free plan (512 MB RAM), and YouTube often blocks downloads
+# from datacenter IPs. The dashboard's Clip Maker tab detects when these are
+# missing and tells the user to run it locally instead.
+anthropic>=2.9.0               # server-side fallbacks + output_config used by clipper/planner.py
+yt-dlp[default]>=2026.10.26    # [default] bundles yt-dlp-ejs — without it YouTube returns HTTP 403
+faster-whisper>=1.1.0
+imageio-ffmpeg>=0.5.1          # ffmpeg build with libass + HarfBuzz (burned-in captions, Devanagari)
+numpy>=1.24.0

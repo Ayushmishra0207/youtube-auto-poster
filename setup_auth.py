@@ -42,11 +42,25 @@ if __name__ == "__main__":
             print("Existing token found with correct scopes. Re-authenticating anyway to refresh...")
         else:
             print("Existing token is missing a required scope (thumbnail management or analytics).")
-            print("Deleting stale token and starting fresh OAuth flow...")
-        os.remove(YOUTUBE_TOKEN_FILE)
+            print("Starting a fresh OAuth flow...")
+        # Move the old token aside instead of deleting it: if the browser flow
+        # fails (closed window, missing client_secrets.json) it's put back, so a
+        # failed re-auth can't leave the scheduled uploads with no token at all.
+        backup = YOUTUBE_TOKEN_FILE + ".bak"
+        os.replace(YOUTUBE_TOKEN_FILE, backup)
+    else:
+        backup = ""
 
     print("Opening browser for YouTube OAuth...")
-    svc = _get_service()
+    try:
+        svc = _get_service()
+    except BaseException:
+        if backup and os.path.exists(backup) and not os.path.exists(YOUTUBE_TOKEN_FILE):
+            os.replace(backup, YOUTUBE_TOKEN_FILE)
+            print("[fail] Re-authentication failed — your previous token was restored.")
+        raise
+    if backup and os.path.exists(backup):
+        os.remove(backup)
     me  = svc.channels().list(part="snippet", mine=True).execute()
     name = me["items"][0]["snippet"]["title"]
     print(f"[ok] Authenticated as: {name}")

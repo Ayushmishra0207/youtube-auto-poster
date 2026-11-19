@@ -3,14 +3,17 @@
 import { type Tab } from "@/app/page";
 import {
   LayoutDashboard, BarChart2, Film, Upload,
-  ListTodo, ScrollText, CalendarClock, Settings, Sparkles,
+  ListTodo, ScrollText, CalendarClock, Settings, Sparkles, Scissors, Instagram,
 } from "lucide-react";
 
+// Must list every tab in Sidebar — on phones this is the only navigation
 const NAV: { id: Tab; icon: React.ReactNode; label: string }[] = [
   { id: "overview",  icon: <LayoutDashboard size={19} />, label: "Home"     },
   { id: "analytics", icon: <BarChart2 size={19} />,       label: "Stats"    },
   { id: "videos",    icon: <Film size={19} />,            label: "Videos"   },
   { id: "shorts",    icon: <Sparkles size={19} />,        label: "Shorts"   },
+  { id: "clips",     icon: <Scissors size={19} />,        label: "Clips"    },
+  { id: "instagram", icon: <Instagram size={19} />,       label: "Insta"    },
   { id: "upload",    icon: <Upload size={19} />,          label: "Upload"   },
   { id: "topics",    icon: <ListTodo size={19} />,        label: "Topics"   },
   { id: "logs",      icon: <ScrollText size={19} />,      label: "Logs"     },

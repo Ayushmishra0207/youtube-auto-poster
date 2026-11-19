@@ -5,9 +5,8 @@ import {
   Upload, FileVideo, X, CheckCircle, AlertCircle,
   ExternalLink, Image, Clock, Tag, AlignLeft, Hash,
 } from "lucide-react";
-import { authHeaders } from "@/lib/api";
+import { longRequest } from "@/lib/api";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const CATEGORIES = [
   { id: "25", label: "News & Politics" },
@@ -129,13 +128,13 @@ export default function UploadPanel() {
     if (thumbFile) fd.append("thumbnail", thumbFile);
 
     try {
-      const res = await fetch(`${BASE}/api/upload`, { method: "POST", headers: authHeaders(), body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Upload failed");
+      const data = await longRequest("/api/upload", { method: "POST", body: fd });
       setResult(data);
-      // Reset form on success
+      // Reset form on success (and the hidden inputs, or re-picking the same file fires no onChange)
       setVideoFile(null);
       setThumbFile(null);
+      if (videoRef.current) videoRef.current.value = "";
+      if (thumbRef.current) thumbRef.current.value = "";
       setTitle("");
       setDescription("");
       setTags("");
@@ -241,7 +240,11 @@ export default function UploadPanel() {
               </div>
             </div>
             <button
-              onClick={(e) => { e.stopPropagation(); setVideoFile(null); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setVideoFile(null);
+                if (videoRef.current) videoRef.current.value = "";
+              }}
               className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors hover:bg-red-500/20"
               style={{ color: "#94a3b8" }}
             >

@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import { api, type TopicConfigSlot } from "@/lib/api";
 import { Check, X, Pencil, ChevronDown, RefreshCw, Save } from "lucide-react";
 
-const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30"];
+// Must match config.UPLOAD_SLOTS_IST (8 slots incl. 19:40) — used only when the server has no config yet
+const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30","19:40"];
 
 interface Category {
   label: string;
@@ -135,6 +136,7 @@ export default function TopicsPanel() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
   const load = async () => {
     try {
@@ -146,8 +148,11 @@ export default function TopicsPanel() {
           : SLOTS.map((slot) => ({ slot, category: "news_india", custom_topic: null }))
       );
       setDirty(false);
+      setError("");
     } catch {
-      setSlots(SLOTS.map((slot) => ({ slot, category: "news_india", custom_topic: null })));
+      // Don't substitute defaults here: saving them would overwrite the real
+      // slot config (categories, pinned topics, locales) on the server.
+      setError("Couldn't load the topic config — press Reset to retry. Saving is disabled until it loads.");
     }
   };
 
@@ -182,6 +187,9 @@ export default function TopicsPanel() {
       setDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      setError("");
+    } catch {
+      setError("Save failed — your changes are still here, try again.");
     } finally {
       setSaving(false);
     }
@@ -205,7 +213,7 @@ export default function TopicsPanel() {
           </button>
           <button
             onClick={saveAll}
-            disabled={!dirty || saving}
+            disabled={!dirty || saving || slots.length === 0}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             style={{
               background: saved
@@ -220,6 +228,8 @@ export default function TopicsPanel() {
           </button>
         </div>
       </div>
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
 
       {/* Category legend chips */}
       <div className="glass rounded-xl p-4">

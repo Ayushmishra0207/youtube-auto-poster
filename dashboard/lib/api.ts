@@ -1,9 +1,11 @@
-import type { InstagramPost } from "./types";
+import type { ClipJob, ClipOptions, ClipRequest, InstagramPost } from "./types";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Trailing slash stripped: "https://x.onrender.com/" would otherwise produce "//api/..." → 404
+export const BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 
-// Render free tier cold-starts in 30-60s — give it enough time
-const TIMEOUT_MS = 20000;
+// Render free tier cold-starts in 30-60s — the old 20 s limit aborted the first
+// request after every sleep (login said "Invalid password", panels errored).
+const TIMEOUT_MS = 65000;
 
 const TOKEN_KEY = "yt_autoposter_token";
 
@@ -54,8 +56,18 @@ function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Respo
     .finally(() => clearTimeout(id));
 }
 
+// Fired when the backend rejects our token (expired, or the server's session DB
+// was wiped by a Render redeploy) — page.tsx listens and shows the login screen.
+export const AUTH_EXPIRED_EVENT = "yt-autoposter:auth-expired";
+
+function handleUnauthorized(): never {
+  clearToken();
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+  throw new AuthError("Not authenticated");
+}
+
 async function unwrap<T>(res: Response, label: string): Promise<T> {
-  if (res.status === 401) throw new AuthError("Not authenticated");
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`API ${label} → ${res.status}`);
   return res.json();
 }
@@ -96,7 +108,8 @@ async function login(username: string, password: string): Promise<{ token: strin
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) throw new Error("Invalid username or password");
+  if (res.status === 401) throw new AuthError("Invalid username or password");
+  if (!res.ok) throw new Error(`Server error (${res.status}) — try again in a minute`);
   return res.json();
 }
 
@@ -123,8 +136,44 @@ export const api = {
   shortScript:     (date: string, index: number)  => get(`/api/shorts/${date}/${index}/script`),
   instagramPosts:     ()               => get<{ posts: InstagramPost[] }>("/api/instagram/posts"),
   retryInstagramPost: (id: string)     => post(`/api/instagram/posts/${id}/retry`),
-  runInstagramNow:    ()               => post<{ ok: boolean; posted: number; failed: number }>("/api/instagram/run"),
+  // Publishing a Reel polls Instagram for well over 20 s — must not use the timed post()
+  runInstagramNow:    ()               => longRequest<{ ok: boolean; posted: number; failed: number }>("/api/instagram/run", { method: "POST" }),
+  regenerateVideo: (date: string, index: number) =>
+    post<{ ok: boolean; message?: string }>(`/api/videos/${date}/${index}/regenerate`, {}),
+  regenerateShort: (date: string, index: number, feed: "india" | "world" | "business", topic = "", contentType = "news") =>
+    post<{ ok: boolean; message?: string }>(`/api/shorts/${date}/${index}/regenerate`, { feed, topic, content_type: contentType }),
+  clipOptions:     ()                          => get<ClipOptions>("/api/clips/options"),
+  clipJobs:        ()                          => get<{ jobs: ClipJob[]; running: number }>("/api/clips"),
+  createClipJob:   (req: ClipRequest)          => post<{ ok: boolean; job_id?: string; message: string }>("/api/clips", req),
+  cancelClipJob:   (jobId: string)             => post<{ ok: boolean; message?: string }>(`/api/clips/${jobId}/cancel`),
+  deleteClipJob:   (jobId: string)             => del<{ ok: boolean }>(`/api/clips/${jobId}`),
 };
+
+/**
+ * For long-running calls (YouTube uploads, Instagram publishing): no client-side
+ * timeout, 401 → login screen, and a readable error even when Render's proxy
+ * answers with an HTML 502/504 page instead of JSON.
+ */
+export async function longRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: authHeaders(init.headers as Record<string, string> | undefined),
+  });
+  if (res.status === 401) handleUnauthorized();
+  const text = await res.text();
+  let data: any = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON error page */ }
+  if (!res.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : "";
+    throw new Error(detail || `Request failed (${res.status}${res.status >= 502 ? " — server busy or restarting, try again" : ""})`);
+  }
+  return data as T;
+}
+
+export function uploadClip(jobId: string, index: number) {
+  return longRequest<{ ok: boolean; url: string; video_id: string }>(`/api/clips/${jobId}/${index}/upload`, { method: "POST" });
+}
 
 export interface TopicConfigSlot {
   slot: string;

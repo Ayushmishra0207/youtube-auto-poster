@@ -26,6 +26,14 @@ Endpoints:
   GET  /api/videos/{date}/{n}/script        Serve script JSON
   GET  /api/settings                        Read editable config values
   POST /api/settings                        Persist config overrides to .env
+  GET  /api/clips/options                   Clip Maker modes/styles + whether it's installed here
+  GET  /api/clips                           List viral-clip jobs (+ their clips)
+  POST /api/clips                           Start a clip job from a YouTube link
+  GET  /api/clips/{job}                     One job's status
+  POST /api/clips/{job}/cancel              Stop a running job
+  DELETE /api/clips/{job}                   Delete a job and its files
+  GET  /api/clips/{job}/{n}/video|thumbnail Serve a clip
+  POST /api/clips/{job}/{n}/upload          Upload a clip to YouTube as a Short
 
 Run with:
   uvicorn api.main:app --reload --port 8000
@@ -40,6 +48,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,7 +63,9 @@ import auth as auth_module
 from config import ENGAGEMENT_POLL_SECONDS, INSTAGRAM_POLL_SECONDS, UPLOAD_SLOTS_IST
 from db import init_db
 from pipeline.locales import DEFAULT_LOCALE, LOCALES, locales_by_continent
+from pipeline import locking
 from pipeline.logger import log
+from pipeline.text_utils import YT_DESCRIPTION_MAX_BYTES, fit_youtube_tags, fit_youtube_text
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR         = Path(__file__).parent.parent
@@ -117,13 +128,25 @@ async def _startup():
     asyncio.create_task(_instagram_loop())
 
 
+# The background loop and the "generate now" endpoint both run the engagement
+# pass (read-modify-write of engagement_state.json + posting comments). Without
+# this lock two overlapping passes could post the same CTA comment twice, and a
+# dismiss during a pass was overwritten.
+_engagement_lock = threading.Lock()
+
+
+def _engagement_pass_locked() -> dict:
+    from pipeline.engagement import run_engagement_pass
+    with _engagement_lock:
+        return run_engagement_pass()
+
+
 async def _engagement_loop():
     """Background poll loop: auto-comment CTAs on new uploads + top up the
     Community-post draft queue. See pipeline/engagement.py for the actual work."""
-    from pipeline.engagement import run_engagement_pass
     while True:
         try:
-            result = await asyncio.to_thread(run_engagement_pass)
+            result = await asyncio.to_thread(_engagement_pass_locked)
             if result["posted_comments"] or result["draft_count"]:
                 log.info("Engagement pass: %s", result)
         except Exception as exc:
@@ -146,10 +169,13 @@ async def _instagram_loop():
         await asyncio.sleep(INSTAGRAM_POLL_SECONDS)
 
 
+# Vercel deployments + a local dashboard on any port (dev server may not get :3000)
+_ORIGIN_REGEX = r"https://.*\.vercel\.app|http://(localhost|127\.0\.0\.1):\d+"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -163,7 +189,7 @@ def _session_token_from_request(request: Request) -> str:
     return request.query_params.get("token", "")
 
 
-_VERCEL_ORIGIN_RE = re.compile(r"https://.*\.vercel\.app")
+_VERCEL_ORIGIN_RE = re.compile(_ORIGIN_REGEX)
 
 
 def _cors_headers_for(request: Request) -> dict[str, str]:
@@ -206,7 +232,7 @@ class LoginPayload(BaseModel):
     password: str
 
 @app.post("/api/auth/login")
-async def login(payload: LoginPayload):
+def login(payload: LoginPayload):
     user_id = auth_module.verify_user(payload.username, payload.password)
     if not user_id:
         raise HTTPException(401, "Invalid username or password")
@@ -227,28 +253,36 @@ async def me(request: Request):
 def _today() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d")
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _yt_language_for(script: dict) -> str:
+    """YouTube language of a generated script (was hardcoded "hi" for every locale)."""
+    try:
+        return LOCALES[script.get("_locale") or DEFAULT_LOCALE].yt_language
+    except Exception:
+        return "hi"
+
+
+def _valid_date(date: str) -> str:
+    """Dates reach filesystem paths and subprocess args — only YYYY-MM-DD is allowed
+    (a value like ..%5C..%5Cx could otherwise escape output/ on Windows)."""
+    if not _DATE_RE.match(date or ""):
+        raise HTTPException(400, "date must be YYYY-MM-DD")
+    return date
+
+
 def _video_dir(date: str, index: int) -> Path:
-    return OUTPUT_DIR / date / f"video_{index:02d}"
+    return OUTPUT_DIR / _valid_date(date) / f"video_{index:02d}"
 
 def _pipeline_running() -> bool:
     global _pipeline_proc
     return _pipeline_proc is not None and _pipeline_proc.poll() is None
 
 def _lock_pid_alive() -> bool:
-    """True only if pipeline.lock exists AND its PID is a live process.
+    """True only if pipeline.lock is held by a live process (works on Windows and Linux).
     A stale lock (dead PID) must not make the dashboard show 'Running' forever."""
-    lock_file = BASE_DIR / "pipeline.lock"
-    if not lock_file.exists():
-        return False
-    try:
-        pid = int(lock_file.read_text().strip())
-        r = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return str(pid) in r.stdout
-    except Exception:
-        return False
+    return locking.lock_owner(BASE_DIR / "pipeline.lock") is not None
 
 def _read_env() -> dict:
     env = {}
@@ -289,14 +323,7 @@ def _short_proc_running() -> bool:
     return _short_proc is not None and _short_proc.poll() is None
 
 def _short_lock_pid_alive() -> bool:
-    if not SHORT_LOCK_FILE.exists():
-        return False
-    try:
-        pid = int(SHORT_LOCK_FILE.read_text().strip())
-        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True, timeout=10)
-        return str(pid) in r.stdout
-    except Exception:
-        return False
+    return locking.lock_owner(SHORT_LOCK_FILE) is not None
 
 def _load_topic_config() -> dict:
     # Cloud: seed from env var on first boot if file doesn't exist
@@ -338,7 +365,7 @@ def _get_analytics_service():
 # ── Status ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
-async def status():
+def status():
     today_dir = OUTPUT_DIR / _today()
     video_count = len(list(today_dir.glob("video_*"))) if today_dir.exists() else 0
     last_log = _tail_log(1)
@@ -357,13 +384,18 @@ async def status():
 # ── Videos ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/videos")
-async def list_videos(date: Optional[str] = None):
-    target = date or _today()
+def list_videos(date: Optional[str] = None):
+    target = _valid_date(date or _today())
     today_dir = OUTPUT_DIR / target
     videos = []
     if today_dir.exists():
         dirs = sorted(d for d in today_dir.iterdir() if d.is_dir() and d.name.startswith("video_"))
-        for i, vdir in enumerate(dirs):
+        for vdir in dirs:
+            try:
+                n = int(vdir.name.split("_")[1])
+            except (IndexError, ValueError):
+                continue
+            i = n - 1
             script_path = vdir / "script.json"
             title = vdir.name
             title_english = description = thumbnail_text = ""
@@ -412,6 +444,7 @@ class RegenerateVideoPayload(BaseModel):
 @app.post("/api/videos/{date}/{index}/regenerate")
 async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayload = RegenerateVideoPayload()):
     """Regenerate an existing video slot in place (new script/voice/images/render, no auto-upload)."""
+    _valid_date(date)
     key = _regen_key("video", date, index)
     if _regen_running(key) or _pipeline_running() or _lock_pid_alive():
         return {"ok": False, "message": "A video generation/regeneration is already in progress"}
@@ -507,7 +540,7 @@ async def save_topic_config(payload: TopicConfigPayload):
 # ── Analytics ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/analytics")
-async def get_analytics():
+def get_analytics():
     """YouTube channel stats + recent video metrics using saved OAuth token."""
     try:
         svc = _get_youtube_service()
@@ -580,7 +613,7 @@ _SHORTS_SUBS_TARGET    = 1000
 _SHORTS_VIEWS_TARGET   = 10_000_000
 
 @app.get("/api/monetization")
-async def get_monetization_progress():
+def get_monetization_progress():
     """
     Real progress toward YouTube Partner Program eligibility, both paths:
       - Standard: 1,000 subscribers + 4,000 public watch hours (last 365 days)
@@ -753,19 +786,24 @@ async def upload_generated_video(date: str, index: int):
 
     if not video_path.exists():
         raise HTTPException(404, "Video file not found — generate it first via Run Now.")
+    if id_file.exists():   # already on YouTube (pipeline or earlier click) — never upload twice
+        vid = id_file.read_text(encoding="utf-8").strip()
+        return {"ok": True, "video_id": vid, "url": f"https://youtube.com/watch?v={vid}", "already": True}
 
     # Read metadata from script.json
     title = f"Hindi Video {index} | {date}"
     description = ""
     tags: list[str] = []
     category_id = "25"
+    yt_language = "hi"
 
     if script_path.exists():
         try:
             s = json.loads(script_path.read_text(encoding="utf-8"))
             title       = s.get("title", title)[:100]
-            description = s.get("description", "")[:5000]
-            tags        = [str(t)[:500] for t in s.get("tags", [])[:500]]
+            description = s.get("description", "")
+            tags        = s.get("tags", [])
+            yt_language = _yt_language_for(s)
             # Look up this video's real category (e.g. movie_explained -> Film
             # & Animation) instead of hardcoding News & Politics for
             # everything — this endpoint previously ignored the topic
@@ -782,10 +820,10 @@ async def upload_generated_video(date: str, index: int):
     body = {
         "snippet": {
             "title": title,
-            "description": description,
-            "tags": tags,
+            "description": fit_youtube_text(description, YT_DESCRIPTION_MAX_BYTES),
+            "tags": fit_youtube_tags(tags),
             "categoryId": category_id,
-            "defaultLanguage": "hi",
+            "defaultLanguage": yt_language,
         },
         "status": {
             "privacyStatus": "public",
@@ -843,8 +881,11 @@ async def upload_generated_video(date: str, index: int):
 async def run_pipeline():
     global _pipeline_proc
 
-    if _pipeline_running():
+    if _pipeline_running() or _lock_pid_alive():
         return {"ok": False, "message": "Pipeline is already running"}
+    # A running "Regenerate" writes into the same video_NN folders the pipeline would
+    if any(k.startswith("video:") and _regen_running(k) for k in list(_regen_procs)):
+        return {"ok": False, "message": "A video is being regenerated — wait for it to finish first"}
 
     _pipeline_proc = subprocess.Popen(
         [PYTHON, str(BASE_DIR / "scheduler.py"), "--now"],
@@ -858,7 +899,7 @@ async def run_pipeline():
 # ── YouTube Shorts ───────────────────────────────────────────────────────────────
 
 def _short_dir(date: str, index: int) -> Path:
-    return OUTPUT_DIR / date / f"short_{index:02d}"
+    return OUTPUT_DIR / _valid_date(date) / f"short_{index:02d}"
 
 def _ensure_short_thumbnail(short_dir: Path) -> bool:
     """
@@ -891,8 +932,8 @@ def _ensure_short_thumbnail(short_dir: Path) -> bool:
         return False
 
 @app.get("/api/shorts")
-async def list_shorts(date: Optional[str] = None):
-    target = date or _today()
+def list_shorts(date: Optional[str] = None):
+    target = _valid_date(date or _today())
     today_dir = OUTPUT_DIR / target
     shorts = []
     if today_dir.exists():
@@ -940,7 +981,7 @@ async def list_shorts(date: Optional[str] = None):
     }
 
 @app.get("/api/shorts/{date}/{index}/thumbnail")
-async def serve_short_thumbnail(date: str, index: int):
+def serve_short_thumbnail(date: str, index: int):
     short_dir = _short_dir(date, index)
     path = short_dir / "thumbnail.jpg"
     if not path.exists():
@@ -1054,10 +1095,14 @@ async def upload_generated_short(date: str, index: int):
 
     if not video_path.exists():
         raise HTTPException(404, "Short video not found — generate it first.")
+    if id_file.exists():   # already on YouTube (pipeline or earlier click) — never upload twice
+        vid = id_file.read_text(encoding="utf-8").strip()
+        return {"ok": True, "video_id": vid, "url": f"https://youtube.com/shorts/{vid}", "already": True}
 
     title = f"Breaking News Short {index} | {date} #Shorts"
     description = "#Shorts #News #Breaking"
     tags: list[str] = ["shorts", "news", "breaking news"]
+    yt_language = "hi"
 
     if script_path.exists():
         try:
@@ -1065,18 +1110,19 @@ async def upload_generated_short(date: str, index: int):
             title       = s.get("title", title)[:100]
             if "#shorts" not in title.lower():
                 title = title[:90] + " #Shorts"
-            description = s.get("description", description)[:5000]
-            tags        = [str(t)[:500] for t in s.get("tags", tags)[:500]]
+            description = s.get("description", description)
+            tags        = s.get("tags", tags)
+            yt_language = _yt_language_for(s)
         except Exception:
             pass
 
     body = {
         "snippet": {
             "title": title,
-            "description": description,
-            "tags": tags,
+            "description": fit_youtube_text(description, YT_DESCRIPTION_MAX_BYTES),
+            "tags": fit_youtube_tags(tags),
             "categoryId": "25",
-            "defaultLanguage": "hi",
+            "defaultLanguage": yt_language,
         },
         "status": {
             "privacyStatus": "public",
@@ -1123,6 +1169,241 @@ async def upload_generated_short(date: str, index: int):
         raise HTTPException(500, f"Upload failed: {e}")
 
 
+# ── Viral Clip Maker ─────────────────────────────────────────────────────────────
+# Paste a YouTube link → vertical, captioned clips. Work runs in clip_now.py
+# subprocesses; each job keeps its state in output/clips/<job_id>/status.json.
+# Needs requirements-clipper.txt (Whisper + yt-dlp + ffmpeg) — too heavy for
+# Render's free plan, so on a server without them the tab explains that instead.
+
+CLIPS_DIR = OUTPUT_DIR / "clips"
+_CLIP_JOB_RE = re.compile(r"^[0-9A-Za-z_-]{6,64}$")
+_clip_procs: dict[str, subprocess.Popen] = {}
+MAX_PARALLEL_CLIP_JOBS = int(os.environ.get("CLIPPER_MAX_PARALLEL", "1"))
+
+
+def _clipper_missing() -> list[str]:
+    import importlib.util
+    return [m for m in ("yt_dlp", "faster_whisper", "imageio_ffmpeg") if importlib.util.find_spec(m) is None]
+
+
+def _clip_job_dir(job_id: str) -> Path:
+    if not _CLIP_JOB_RE.match(job_id):
+        raise HTTPException(400, "Invalid job id")
+    d = CLIPS_DIR / job_id
+    if not (d / "status.json").exists():
+        raise HTTPException(404, "Clip job not found")
+    return d
+
+
+def _pid_alive(pid: int) -> bool:
+    return locking.pid_running(pid)
+
+
+def _clip_status(job_dir: Path) -> dict:
+    try:
+        st = json.loads((job_dir / "status.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {"job_id": job_dir.name, "state": "failed", "error": "Unreadable status file", "clips": []}
+    job_id = job_dir.name
+    proc = _clip_procs.get(job_id)
+    running_here = proc is not None and proc.poll() is None
+    # A worker that died without writing "failed" (crash, reboot, killed) must not spin forever
+    if st.get("state") in ("queued", "running") and not running_here:
+        if not (proc is None and _pid_alive(int(st.get("pid") or 0))):
+            if proc is not None or time.time() - float(st.get("updated_at") or 0) > 30:
+                st["state"], st["stage"] = "failed", "failed"
+                st["error"] = st.get("error") or "The clip worker stopped unexpectedly — check logs/clipper.log"
+    for c in st.get("clips", []):
+        n = int(c.get("index", 0))
+        cdir = job_dir / f"clip_{n:02d}"
+        yt_file = cdir / "youtube_id.txt"
+        c["video_url"] = f"/api/clips/{job_id}/{n}/video"
+        c["thumbnail_url"] = f"/api/clips/{job_id}/{n}/thumbnail"
+        c["has_video"] = (cdir / "clip.mp4").exists()
+        c["youtube_id"] = yt_file.read_text().strip() if yt_file.exists() else ""
+        c["youtube_url"] = f"https://youtube.com/shorts/{c['youtube_id']}" if c["youtube_id"] else ""
+    st["job_id"] = job_id
+    return st
+
+
+def _clip_jobs_running() -> int:
+    return sum(1 for p in _clip_procs.values() if p.poll() is None)
+
+
+class ClipJobPayload(BaseModel):
+    url: str
+    mode: str = "gta6_action"
+    num_clips: int = 3
+    length: str = "auto"
+    layout: str = "blur_fit"
+    caption_style: str = "auto"
+    language: str = "auto"
+    title_language: str = "hinglish"
+    hook_text: bool = True
+    watermark: str = ""
+    audio_mode: str = "original"
+    credit_source: bool = True
+    use_ai: bool = True
+
+
+@app.get("/api/clips/options")
+async def clip_options():
+    from clipper.common import find_music_track
+    from clipper.modes import options_payload
+    music = find_music_track()
+    missing = _clipper_missing()
+    return {
+        **options_payload(),
+        "music_available": music is not None,
+        "music_track": music.name if music else "",
+        "available": not missing,
+        "unavailable_reason": (
+            f"Clip Maker needs extra packages on this server ({', '.join(missing)}). "
+            "Run it on your PC: pip install -r requirements-clipper.txt, then start.bat."
+        ) if missing else "",
+    }
+
+
+@app.get("/api/clips")
+def list_clip_jobs(limit: int = 30):
+    jobs = []
+    if CLIPS_DIR.exists():
+        dirs = sorted((d for d in CLIPS_DIR.iterdir() if d.is_dir() and (d / "status.json").exists()),
+                      key=lambda d: d.name, reverse=True)[:limit]
+        jobs = [_clip_status(d) for d in dirs]
+    return {"jobs": jobs, "running": _clip_jobs_running()}
+
+
+@app.post("/api/clips")
+async def create_clip_job(payload: ClipJobPayload):
+    from clipper.job import new_job
+    from clipper.modes import CAPTION_STYLES, LENGTH_PRESETS, MODES, NO_CAPTIONS
+
+    missing = _clipper_missing()
+    if missing:
+        raise HTTPException(503, f"Clip Maker isn't installed on this server (missing: {', '.join(missing)})")
+    url = payload.url.strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(400, "Paste a full video link starting with https://")
+    if payload.mode not in MODES:
+        raise HTTPException(400, f"Unknown mode '{payload.mode}'")
+    if payload.length not in LENGTH_PRESETS:
+        raise HTTPException(400, f"Unknown length '{payload.length}'")
+    if payload.caption_style not in ("auto", NO_CAPTIONS, *CAPTION_STYLES):
+        raise HTTPException(400, f"Unknown caption style '{payload.caption_style}'")
+    if payload.layout not in ("blur_fit", "center_crop"):
+        raise HTTPException(400, "layout must be blur_fit or center_crop")
+    if payload.audio_mode not in ("original", "original_music", "music_only"):
+        raise HTTPException(400, "Unknown audio mode")
+    if payload.title_language not in ("hinglish", "hindi", "english"):
+        raise HTTPException(400, "Unknown title language")
+    if _clip_jobs_running() >= MAX_PARALLEL_CLIP_JOBS:
+        return {"ok": False, "message": "A clip job is already running — wait for it to finish."}
+
+    job_dir = new_job({**payload.model_dump(), "url": url, "watermark": payload.watermark.strip()[:40]})
+    proc = subprocess.Popen(
+        [PYTHON, str(BASE_DIR / "clip_now.py"), "--job", job_dir.name],
+        cwd=str(BASE_DIR), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
+    _clip_procs[job_dir.name] = proc
+    return {"ok": True, "job_id": job_dir.name, "message": "Clip job started"}
+
+
+@app.get("/api/clips/{job_id}")
+def get_clip_job(job_id: str):
+    return _clip_status(_clip_job_dir(job_id))
+
+
+@app.post("/api/clips/{job_id}/cancel")
+async def cancel_clip_job(job_id: str):
+    job_dir = _clip_job_dir(job_id)
+    proc = _clip_procs.get(job_id)
+    if proc is None or proc.poll() is not None:
+        return {"ok": False, "message": "Job is not running"}
+    if sys.platform == "win32":  # kill the whole tree (ffmpeg children too)
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+    else:
+        proc.kill()
+    from clipper.common import JobStatus
+    JobStatus(job_dir).update(state="failed", stage="failed", error="Cancelled", message="Cancelled")
+    return {"ok": True}
+
+
+@app.delete("/api/clips/{job_id}")
+async def delete_clip_job(job_id: str):
+    job_dir = _clip_job_dir(job_id)
+    proc = _clip_procs.get(job_id)
+    if proc is not None and proc.poll() is None:
+        raise HTTPException(409, "Job is still running — cancel it first")
+    shutil.rmtree(job_dir, ignore_errors=True)
+    _clip_procs.pop(job_id, None)
+    return {"ok": True}
+
+
+@app.get("/api/clips/{job_id}/{index}/video")
+async def serve_clip_video(job_id: str, index: int, download: bool = False):
+    path = _clip_job_dir(job_id) / f"clip_{index:02d}" / "clip.mp4"
+    if not path.exists():
+        raise HTTPException(404, "Clip not found")
+    # The dashboard is cross-origin, so <a download> is ignored — the header decides
+    return FileResponse(path, media_type="video/mp4", filename=f"{job_id}_clip{index:02d}.mp4",
+                        content_disposition_type="attachment" if download else "inline")
+
+
+@app.get("/api/clips/{job_id}/{index}/thumbnail")
+async def serve_clip_thumbnail(job_id: str, index: int):
+    path = _clip_job_dir(job_id) / f"clip_{index:02d}" / "thumb.jpg"
+    if not path.exists():
+        raise HTTPException(404, "Thumbnail not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.post("/api/clips/{job_id}/{index}/upload")
+async def upload_clip(job_id: str, index: int):
+    """Upload a finished clip to YouTube as a Short (public)."""
+    cdir = _clip_job_dir(job_id) / f"clip_{index:02d}"
+    video_path, meta_path, id_file = cdir / "clip.mp4", cdir / "clip.json", cdir / "youtube_id.txt"
+    if not video_path.exists() or not meta_path.exists():
+        raise HTTPException(404, "Clip not found")
+    if id_file.exists():
+        vid = id_file.read_text().strip()
+        return {"ok": True, "video_id": vid, "url": f"https://youtube.com/shorts/{vid}", "already": True}
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    title = meta.get("title", "Clip")[:100]
+    if "#shorts" not in title.lower() and len(title) <= 90:
+        title = f"{title} #Shorts"
+    body = {
+        "snippet": {
+            "title": title,
+            "description": meta.get("description", "")[:5000],
+            "tags": [str(t)[:100] for t in meta.get("tags", [])][:30],
+            "categoryId": meta.get("yt_category", "20"),
+        },
+        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+    }
+
+    def _do_upload() -> dict:
+        from googleapiclient.http import MediaFileUpload
+        svc = _get_youtube_service()
+        media = MediaFileUpload(str(video_path), mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024)
+        req = svc.videos().insert(part="snippet,status", body=body, media_body=media)
+        response = None
+        while response is None:
+            _, response = req.next_chunk(num_retries=5)
+        vid = response["id"]
+        id_file.write_text(vid, encoding="utf-8")
+        return {"ok": True, "video_id": vid, "url": f"https://youtube.com/shorts/{vid}"}
+
+    try:
+        return await asyncio.to_thread(_do_upload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {e}")
+
+
 # ── Logs ───────────────────────────────────────────────────────────────────────
 
 @app.get("/api/logs")
@@ -1152,7 +1433,9 @@ class SettingsPayload(BaseModel):
 
 @app.get("/api/settings")
 async def get_settings():
-    env = _read_env()
+    # On Render the keys are real environment variables, not .env lines — show both
+    # (previously every key looked "unset" in production).
+    env = {**os.environ, **_read_env()}
     return {
         "ANTHROPIC_API_KEY": "***" if env.get("ANTHROPIC_API_KEY") else "",
         "PEXELS_API_KEY": "***" if env.get("PEXELS_API_KEY") else "",
@@ -1217,9 +1500,10 @@ async def get_community_posts():
     return {"drafts": list_drafts()}
 
 @app.post("/api/community-posts/{draft_id}/dismiss")
-async def dismiss_community_post(draft_id: str):
+def dismiss_community_post(draft_id: str):
     from pipeline.engagement import dismiss_draft
-    ok = dismiss_draft(draft_id)
+    with _engagement_lock:
+        ok = dismiss_draft(draft_id)
     if not ok:
         raise HTTPException(404, "Draft not found")
     return {"ok": True}
@@ -1227,8 +1511,7 @@ async def dismiss_community_post(draft_id: str):
 @app.post("/api/community-posts/generate")
 async def generate_community_post_now():
     """Force an engagement pass right now instead of waiting for the next poll tick."""
-    from pipeline.engagement import run_engagement_pass
-    result = await asyncio.to_thread(run_engagement_pass)
+    result = await asyncio.to_thread(_engagement_pass_locked)
     return {"ok": True, **result}
 
 
@@ -1274,15 +1557,36 @@ async def ws_logs(websocket: WebSocket):
     try:
         for line in _tail_log(50):
             await websocket.send_text(line)
-        if LOG_FILE.exists():
-            with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
-                f.seek(0, 2)
-                while True:
-                    line = f.readline()
-                    if line:
-                        await websocket.send_text(line.rstrip())
-                    else:
-                        await asyncio.sleep(0.4)
+        f = None
+        pos = 0
+        try:
+            while True:
+                if f is None and LOG_FILE.exists():
+                    f = open(LOG_FILE, encoding="utf-8", errors="replace")
+                    f.seek(0, 2) if pos == 0 else f.seek(0)
+                line = f.readline() if f else ""
+                if line:
+                    await websocket.send_text(line.rstrip())
+                    pos = f.tell()
+                    continue
+                # After a rollover the file is renamed/recreated: if it's now shorter
+                # than where we were, reopen it — otherwise the stream went silent.
+                try:
+                    if f and LOG_FILE.stat().st_size < pos:
+                        f.close()
+                        f, pos = None, 1   # pos=1 → read the new file from its start
+                except FileNotFoundError:
+                    pass
+                # Waiting on receive (instead of sleep) notices a closed tab right
+                # away, rather than leaking this coroutine + file handle until the
+                # next log line is sent.
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=0.4)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            if f:
+                f.close()
     except WebSocketDisconnect:
         pass
     except Exception:

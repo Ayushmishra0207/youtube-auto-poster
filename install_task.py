@@ -1,6 +1,12 @@
 """
 Install (or update) a Windows Task Scheduler entry that runs the pipeline
-every day at 02:30 IST automatically, even if no user is logged in.
+once every day at the generation time (config: first upload slot minus
+GENERATION_LEAD_HOURS → 14:30 IST), while you are logged in.
+
+It runs `scheduler.py --now` (one run, then exit) rather than the long-lived
+daemon: Task Scheduler stops tasks after 72 h by default and skips a trigger
+while the previous instance is still running, which made the daemon approach
+silently miss days.
 
 Usage (run once as Administrator):
   python install_task.py          -- install/update the task
@@ -19,7 +25,11 @@ import sys
 from pathlib import Path
 
 TASK_NAME = "YouTubeAutoPoster"
-TRIGGER_TIME = "02:30"   # local time (set your PC timezone to IST)
+sys.path.insert(0, str(Path(__file__).parent))
+from config import GENERATION_LEAD_HOURS, UPLOAD_SLOTS_IST  # noqa: E402
+
+_first_h, _first_m = map(int, UPLOAD_SLOTS_IST[0].split(":"))
+TRIGGER_TIME = f"{_first_h - GENERATION_LEAD_HOURS:02d}:{_first_m:02d}"   # local time (PC timezone must be IST)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -34,7 +44,7 @@ def install():
     cmd = [
         "schtasks", "/create",
         "/tn",  TASK_NAME,
-        "/tr",  f'"{python}" "{script}"',
+        "/tr",  f'"{python}" "{script}" --now',
         "/sc",  "DAILY",
         "/st",  TRIGGER_TIME,
         "/rl",  "HIGHEST",     # run with highest available privileges

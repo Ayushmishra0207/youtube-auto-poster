@@ -465,8 +465,8 @@ def _build_section_clip(
 
         if clip is None:
             frame = _section_slide(
-                section["heading"],
-                section["narration"],
+                section.get("heading", ""),   # a missing heading used to crash the whole render
+                section.get("narration", ""),
                 img_path,
                 color_pair,
                 size=(ow, oh),

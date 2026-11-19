@@ -5,18 +5,22 @@ import { api } from "@/lib/api";
 import type { VideoMeta } from "@/lib/types";
 import { Clock, Upload, CheckCircle } from "lucide-react";
 
-const SLOTS = ["18:30","18:40","18:50","19:00","19:10","19:20","19:30"];
+// Fallback only — the real list comes from config.UPLOAD_SLOTS_IST via /api/settings
+const DEFAULT_SLOTS = ["18:30", "18:40", "18:50", "19:00", "19:10", "19:20", "19:30", "19:40"];
 
 export default function ScheduleTimeline() {
   const [videos, setVideos] = useState<VideoMeta[]>([]);
+  const [slots, setSlots]   = useState<string[]>(DEFAULT_SLOTS);
 
   useEffect(() => {
-    api.videos().then((r: any) => setVideos(r.videos));
-    const id = setInterval(() => api.videos().then((r: any) => setVideos(r.videos)), 10000);
+    api.settings().then((s: any) => { if (s?.upload_slots?.length) setSlots(s.upload_slots); }).catch(() => {});
+    const load = () => api.videos().then((r: any) => setVideos(r.videos)).catch(() => {});
+    load();
+    const id = setInterval(load, 10000);
     return () => clearInterval(id);
   }, []);
 
-  const bySlot = SLOTS.map((slot) => ({
+  const bySlot = slots.map((slot) => ({
     slot,
     video: videos.find((v) => v.slot === slot) ?? null,
   }));
@@ -26,7 +30,7 @@ export default function ScheduleTimeline() {
       <div>
         <h1 className="text-2xl font-bold text-white">Schedule</h1>
         <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-          Upload timeline — 7 slots from 18:30 to 19:30 IST, every 10 minutes
+          Upload timeline — {slots.length} slots from {slots[0]} to {slots[slots.length - 1]} IST
         </p>
       </div>
 
@@ -42,7 +46,8 @@ export default function ScheduleTimeline() {
           <div className="space-y-4">
             {bySlot.map(({ slot, video }, i) => {
               const filled = video !== null;
-              const done = video?.status === "ready";
+              // "ready" = rendered but NOT uploaded yet; only "uploaded" is done
+              const done = video?.status === "uploaded";
 
               return (
                 <div key={slot} className="flex gap-5 items-start relative">

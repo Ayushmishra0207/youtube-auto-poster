@@ -1,4 +1,8 @@
-from pipeline.script_generator import _SYSTEM_PROMPT
+from pipeline.locales import get_locale
+from pipeline.script_generator import _build_system_prompt
+
+# The prompt is built per-locale now; the SEO rules must hold for the default (Hindi) locale
+_SYSTEM_PROMPT = _build_system_prompt(get_locale(None))
 
 
 def test_title_keyword_placement_rule_present():

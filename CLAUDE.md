@@ -87,7 +87,31 @@ If you change the JSON schema shape, update both the system prompt in [pipeline/
 | voice_generator | 3 | 3s base | `gTTSError`, `OSError` |
 | image_fetcher | 3 | 2s base | `requests.exceptions.RequestException` |
 
-A failed voice clip results in that section being skipped in the video (not a full abort). A failed image falls back to a gradient slide. A failed script aborts that video entirely.
+A failed voice clip results in that section being skipped in the video (not a full abort) — but if *every* section's voice fails the video is aborted rather than uploading a ~9 s title+outro. A failed image falls back to a gradient slide. A failed script (including valid JSON missing `sections`/`items`) aborts that video entirely.
+
+### Locks and upload bookkeeping
+
+- `pipeline/locking.py` owns `pipeline.lock`, `short_generate.lock` and `instagram_queue.lock` (atomic create, stale takeover by rename, PID check that works on Windows *and* Linux). Use it — don't hand-roll `tasklist` checks.
+- After every YouTube upload write `youtube_id.txt` into the item's folder: dashboard status, the duplicate-upload guard and engagement comments all depend on it.
+- Run YouTube metadata through `pipeline/text_utils.fit_youtube_tags` / `fit_youtube_text` (500-char tag budget counting quotes on multi-word tags; 5000 **bytes** of description).
+
+## Viral Clip Maker (`clipper/`)
+
+Separate from the daily pipeline: paste a YouTube link in the dashboard's **Clip Maker** tab (or `python clip_now.py --url ... --mode gta6_action`) → vertical 1080×1920 captioned clips in `output/clips/<job_id>/clip_NN/`.
+
+```
+downloader.py   yt-dlp, ≤1080p, prefers H.264 (AV1 decodes ~10× slower with the bundled ffmpeg); cached in output/clips/_sources/
+analyzer.py     per-second audio energy/onsets, scene cuts, speech density → sliding-window scores weighted per mode
+transcriber.py  faster-whisper word timestamps (CLIPPER_WHISPER_MODEL, default "small"); samples passed as numpy (PyAV decode is broken)
+planner.py      Claude picks moments + writes hook/title/description (structured JSON); falls back to signal picks on any failure
+subtitles.py    ASS file: word-by-word highlighted captions, hook banner, watermark (Devanagari switches to Noto Sans Devanagari)
+renderer.py     ffmpeg: blur-fit or centre-crop reframe, zoom, grade, captions, progress bar, loudnorm, optional music bed
+job.py          orchestration; state in status.json, read by /api/clips*
+```
+
+- Dependencies live in `requirements-clipper.txt`, **not** `requirements.txt`: too heavy for Render's free plan. `/api/clips/options` reports `available: false` there and the tab tells the user to run it locally.
+- ffmpeg is the imageio-ffmpeg binary (libass + HarfBuzz). Captions are burned with `ass=` run from the clip dir with relative paths, because Windows drive-letter colons break ffmpeg filter args.
+- `yt-dlp[default]` is required (bundles `yt-dlp-ejs`; without it YouTube returns HTTP 403).
 
 ## Configuration
 
@@ -99,9 +123,9 @@ All tunable values live in `config.py`. Important constants:
 | FPS | 24 |
 | Bitrate | 4000k |
 | Music volume | 12% |
-| Videos per day | 7 |
-| Upload window | 6:30–7:30 AM IST |
-| Generation trigger | 2:30 AM IST |
+| Videos per day | 8 (`UPLOAD_SLOTS_IST`) |
+| Upload window | 18:30–19:40 IST |
+| Generation trigger | 14:30 IST (first slot − `GENERATION_LEAD_HOURS`) |
 | Output retention | 3 days |
 | TTS language | `hi` (Hindi) |
 | YouTube category | 25 (News & Politics) |
@@ -110,6 +134,6 @@ All tunable values live in `config.py`. Important constants:
 ## Production Deployment
 
 1. Run `python setup_auth.py` (once) to authenticate YouTube OAuth
-2. Run `python install_task.py` from an elevated terminal to register the Windows Task Scheduler job
+2. Run `python install_task.py` from an elevated terminal to register the Windows Task Scheduler job (runs `scheduler.py --now` daily at 14:30)
 3. Ensure Windows timezone is set to IST (UTC+5:30)
 4. Logs are at `logs/pipeline.log` — check here if videos don't appear on the channel

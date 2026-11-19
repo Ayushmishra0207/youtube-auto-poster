@@ -20,14 +20,21 @@ export default function LogViewer() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    // Without `disposed`, closing the socket on unmount fired onclose → reconnect,
+    // leaving a zombie socket (and a server-side file handle) per visit to this tab.
+    let disposed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+
     const connect = () => {
+      if (disposed) return;
       const ws = new WebSocket(wsLogsUrl());
       wsRef.current = ws;
 
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {
+        if (disposed) return;
         setConnected(false);
-        setTimeout(connect, 3000); // auto-reconnect
+        retry = setTimeout(connect, 3000); // auto-reconnect
       };
       ws.onerror = () => ws.close();
       ws.onmessage = (e) => {
@@ -36,7 +43,11 @@ export default function LogViewer() {
       };
     };
     connect();
-    return () => { wsRef.current?.close(); };
+    return () => {
+      disposed = true;
+      clearTimeout(retry);
+      wsRef.current?.close();
+    };
   }, []);
 
   useEffect(() => {

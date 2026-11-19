@@ -27,6 +27,7 @@ export interface VideoMeta {
   script_url: string;
   youtube_id: string;
   youtube_url: string;
+  is_regenerating?: boolean;
 }
 
 export interface VideoScript {
@@ -60,6 +61,7 @@ export interface ShortMeta {
   script_url: string;
   youtube_id: string;
   youtube_url: string;
+  is_regenerating?: boolean;
 }
 
 export interface TopicsResponse {
@@ -92,3 +94,75 @@ export interface InstagramPost {
   error: string | null;
   instagram_media_id: string | null;
 }
+
+// ── Viral Clip Maker ──────────────────────────────────────────────────────────
+
+export interface ClipMode {
+  key: string;
+  label: string;
+  description: string;
+  caption_style: string;
+  min_len: number;
+  max_len: number;
+}
+
+export interface ClipOptions {
+  modes: ClipMode[];
+  caption_styles: { key: string; label: string; highlight: string }[];
+  lengths: { key: string; range: [number, number] | null }[];
+  default_mode: string;
+  music_available: boolean;
+  music_track: string;
+  available: boolean;
+  unavailable_reason: string;
+}
+
+export interface ClipRequest {
+  url: string;
+  mode: string;
+  num_clips: number;
+  length: string;
+  layout: "blur_fit" | "center_crop";
+  caption_style: string;
+  language: string;
+  title_language: "hinglish" | "hindi" | "english";
+  hook_text: boolean;
+  watermark: string;
+  audio_mode: "original" | "original_music" | "music_only";
+  credit_source: boolean;
+  use_ai: boolean;
+}
+
+export interface ClipResult {
+  index: number;
+  start: number;
+  end: number;
+  duration: number;
+  hook_text: string;
+  title: string;
+  description: string;
+  hashtags: string[];
+  score: number;
+  reason: string;
+  picked_by: "ai" | "signals";
+  video_url: string;
+  thumbnail_url: string;
+  has_video: boolean;
+  youtube_id: string;
+  youtube_url: string;
+}
+
+export interface ClipJob {
+  job_id: string;
+  state: "queued" | "running" | "done" | "failed";
+  stage: string;
+  progress: number;
+  message: string;
+  error: string;
+  created_at: number;
+  request: ClipRequest;
+  source: { title?: string; channel?: string; duration?: number; url?: string; thumbnail?: string };
+  clips: ClipResult[];
+  detected_language?: string;
+}
+

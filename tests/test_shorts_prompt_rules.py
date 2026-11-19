@@ -1,5 +1,9 @@
 # tests/test_shorts_prompt_rules.py
-from pipeline.script_generator import _SHORTS_SYSTEM_PROMPT
+from pipeline.locales import get_locale
+from pipeline.script_generator import _build_shorts_system_prompt
+
+# The prompt is built per-locale now; the SEO rules must hold for the default (Hindi) locale
+_SHORTS_SYSTEM_PROMPT = _build_shorts_system_prompt(get_locale(None))
 
 
 def test_first_line_hook_rule_present():

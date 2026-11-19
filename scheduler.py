@@ -16,7 +16,6 @@ Or run once immediately:
   python scheduler.py --now
 """
 import json
-import os
 import shutil
 import sys
 # Force UTF-8 output so Hindi titles print correctly on Windows
@@ -40,7 +39,8 @@ from config import (
     UPLOAD_SLOTS_IST,
     GENERATION_LEAD_HOURS,
 )
-from generate_short_now import build_short_script
+from generate_short_now import SHORT_LOCK_FILE, _next_short_index, build_short_script
+from pipeline import locking
 from pipeline.image_fetcher import fetch_all_section_images
 from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
 from pipeline.logger import log
@@ -62,71 +62,48 @@ IST = timezone(timedelta(hours=5, minutes=30))
 LOCK_FILE = BASE_DIR / "pipeline.lock"
 
 
-def _pid_running(pid: int) -> bool:
-    """Return True if the given PID is alive (Windows-compatible)."""
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["tasklist", "/fi", f"PID eq {pid}", "/nh"],
-            capture_output=True, text=True, timeout=5
-        )
-        return str(pid) in r.stdout
-    except Exception:
-        return False
-
-
-def _try_create_lock() -> bool:
-    """Atomically create the lock file with our PID. False if it already exists —
-    O_CREAT|O_EXCL is a single kernel syscall, so two processes racing to create
-    it can never both succeed (unlike a separate exists-check + write)."""
-    try:
-        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w") as f:
-            f.write(str(os.getpid()))
-        return True
-    except FileExistsError:
-        return False
-
-
 def _acquire_lock() -> bool:
     """Return True if lock was acquired, False if another run is in progress."""
-    if _try_create_lock():
+    if locking.acquire(LOCK_FILE):
         return True
-
-    # Lock file already exists — check whether it's stale (dead PID) and, if
-    # so, clear it and retry once. Two racing processes can both reach here
-    # and both try to remove the file, but only one of the retried
-    # _try_create_lock() calls can win the exclusive-create race.
-    try:
-        pid = int(LOCK_FILE.read_text().strip())
-        if _pid_running(pid):
-            log.warning("Another pipeline is running (PID %d) — aborting this run.", pid)
-            return False
-        log.info("Removing stale lock file (PID %d no longer running).", pid)
-    except Exception:
-        pass
-    LOCK_FILE.unlink(missing_ok=True)
-
-    if _try_create_lock():
-        return True
-    log.warning("Lost the race to acquire pipeline.lock — another run just started. Aborting.")
+    log.warning("Another pipeline is running (PID %s) — aborting this run.", locking.lock_owner(LOCK_FILE))
     return False
 
 
 def _release_lock():
-    LOCK_FILE.unlink(missing_ok=True)
+    locking.release(LOCK_FILE)
 
 
 # ___ Helpers __________________________________________________________________
 
-def _ist_slot_to_utc(slot_str: str) -> datetime:
-    """Convert "HH:MM" IST string (today) to a UTC datetime."""
+def _ist_slot_to_utc(slot_str: str, run_start: datetime | None = None) -> datetime:
+    """
+    Publish time (UTC) for an "HH:MM" IST slot.
+
+    Anchored to when the run *started*, not when the upload happens: slots
+    earlier than the run start (e.g. the 11:00 Shorts slot for a 14:30 run)
+    belong to tomorrow, but a slot that merely passed while we were rendering
+    (8 renders finishing after 18:30) is published shortly instead of being
+    pushed a full day onto the next run's identical slot.
+    """
     now_ist = datetime.now(IST)
+    start = (run_start or now_ist).astimezone(IST)
     h, m = map(int, slot_str.split(":"))
-    naive = now_ist.replace(hour=h, minute=m, second=0, microsecond=0)
-    if naive < now_ist:
-        naive += timedelta(days=1)
-    return naive.astimezone(timezone.utc)
+    target = start.replace(hour=h, minute=m, second=0, microsecond=0)
+    if target < start:
+        target += timedelta(days=1)
+    if target < now_ist + timedelta(minutes=5):
+        target = (now_ist + timedelta(minutes=15)).replace(second=0, microsecond=0)
+    return target.astimezone(timezone.utc)
+
+
+def _save_youtube_id(work_dir: Path, video_id: str) -> None:
+    """The dashboard's "uploaded" status, the duplicate-upload guard, and the
+    engagement auto-comments all key off this file."""
+    try:
+        (work_dir / "youtube_id.txt").write_text(video_id, encoding="utf-8")
+    except OSError as exc:
+        log.warning("Could not record YouTube id %s in %s: %s", video_id, work_dir, exc)
 
 
 def _today_output_dir() -> Path:
@@ -294,6 +271,10 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
             rate=voice_rate,
             locale=locale,
         )
+        if not any(voices):
+            # Otherwise create_video skips every section and a ~9 s title+outro
+            # video gets uploaded as a public scheduled video.
+            raise RuntimeError("No section voice-over could be generated (all TTS providers failed)")
         script = _append_chapters_to_description(script, voices)
 
         # 3. Images
@@ -352,7 +333,15 @@ def run_pipeline():
     """Generate all 8 videos and schedule them for upload."""
     if not _acquire_lock():
         return  # another pipeline is running — skip silently
+    # try/finally: an early return or crash used to leave pipeline.lock behind,
+    # and in daemon mode (same live PID) that blocked every later day's run.
+    try:
+        _run_pipeline_locked()
+    finally:
+        _release_lock()
 
+
+def _run_pipeline_locked():
     now_ist = datetime.now(IST)
     log.info("=" * 60)
     log.info("YouTube Auto-Poster started | %s IST", now_ist.strftime("%d %b %Y, %H:%M"))
@@ -386,14 +375,14 @@ def run_pipeline():
             meta["yt_category_id"] = plan.get("yt_category_id", "25")
             videos.append(meta)
 
-    if not videos:
-        log.error("No videos generated — aborting upload step.")
-        return
-
     # __ Upload + schedule ____________________________________________________
-    log.info("Uploading %d videos to YouTube...", len(videos))
+    if not videos:
+        # Still run Shorts (separate news feeds) and cleanup below
+        log.error("No long-form videos generated — skipping their upload step.")
+    else:
+        log.info("Uploading %d videos to YouTube...", len(videos))
     for v in videos:
-        publish_utc = _ist_slot_to_utc(v["slot"])
+        publish_utc = _ist_slot_to_utc(v["slot"], run_start=now_ist)
         log.info("Uploading: %s → %s IST", v["title"][:60], v["slot"])
         try:
             vid_id = upload_video(
@@ -405,13 +394,14 @@ def run_pipeline():
                 category_id=v.get("yt_category_id", "25"),
                 yt_language=v.get("yt_language", "hi"),
             )
+            _save_youtube_id(Path(v["path"]).parent, vid_id)
             upload_thumbnail(vid_id, v["thumbnail_path"])
         except Exception as e:
             log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
 
     # __ YouTube Shorts (5 per day: India / World / Business / Entertainment / Sports breaking news) ___
     try:
-        _run_shorts(base_dir)
+        _run_shorts(base_dir, run_start=now_ist)
     except Exception as e:
         log.error("Shorts stage failed: %s", e, exc_info=True)
 
@@ -419,9 +409,8 @@ def run_pipeline():
     log.info("Running disk cleanup (keep last %d days)...", KEEP_OUTPUT_DAYS)
     _cleanup_old_output()
 
-    log.info("Pipeline complete. Videos scheduled for 18:30–19:40 IST.")
+    log.info("Pipeline complete. Videos scheduled for %s–%s IST.", UPLOAD_SLOTS_IST[0], UPLOAD_SLOTS_IST[-1])
     log.info("=" * 60)
-    _release_lock()
 
 
 # ___ YouTube Shorts ___________________________________________________________
@@ -436,14 +425,27 @@ _SHORTS_PLAN = [
 ]
 
 
-def _run_shorts(base_dir: Path):
+def _run_shorts(base_dir: Path, run_start: datetime | None = None):
     """Generate and upload the daily YouTube Shorts (breaking news, 1.5x voice)."""
     log.info("-" * 60)
     log.info("Generating %d YouTube Shorts...", SHORTS_PER_DAY)
 
+    # Share generate_short_now.py's lock: a dashboard "Generate Short" must not
+    # render into the same folder at the same time.
+    if not locking.acquire_wait(SHORT_LOCK_FILE, timeout_s=20 * 60):
+        log.error("A manual Short generation held short_generate.lock for 20+ min — skipping daily Shorts.")
+        return
+    try:
+        _run_shorts_locked(base_dir, run_start)
+    finally:
+        locking.release(SHORT_LOCK_FILE)
+
+
+def _run_shorts_locked(base_dir: Path, run_start: datetime | None):
     for i in range(1, SHORTS_PER_DAY + 1):
         plan = _SHORTS_PLAN[(i - 1) % len(_SHORTS_PLAN)]
-        work_dir = base_dir / f"short_{i:02d}"
+        # Next free short_NN — never overwrite Shorts made from the dashboard earlier today
+        work_dir = base_dir / f"short_{_next_short_index(base_dir):02d}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
         locale = get_locale(plan.get("locale") or DEFAULT_LOCALE)
@@ -469,19 +471,21 @@ def _run_shorts(base_dir: Path):
             if "#shorts" not in title.lower():
                 title = safe_truncate(title, 82, suffix=" #Shorts")
             log.info("Uploading Short %d: %s → %s IST", i, title[:60], slot)
-            upload_video(
+            publish_utc = _ist_slot_to_utc(slot, run_start=run_start)
+            short_id = upload_video(
                 video_path=video_path,
                 title=title,
                 description=script.get("description", "#Shorts #News"),
                 tags=script.get("tags", []),
-                publish_at_utc=_ist_slot_to_utc(slot),
+                publish_at_utc=publish_utc,
                 yt_language=locale.yt_language,
             )
+            _save_youtube_id(work_dir, short_id)
 
             try:
                 from pipeline.instagram_queue import enqueue as ig_enqueue
                 ig_caption = f"{script.get('title', '')}\n\n{script.get('description', '')}"[:2200]
-                ig_enqueue(video_path, ig_caption, publish_at_utc=_ist_slot_to_utc(slot))
+                ig_enqueue(video_path, ig_caption, publish_at_utc=publish_utc)
             except Exception as ig_exc:
                 log.warning("Instagram enqueue failed for Short %d: %s", i, ig_exc)
         except Exception as e:

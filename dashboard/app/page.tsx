@@ -15,9 +15,11 @@ import ScheduleTimeline from "@/components/ScheduleTimeline";
 import SettingsPanel from "@/components/SettingsPanel";
 import UploadPanel from "@/components/UploadPanel";
 import LoginScreen from "@/components/LoginScreen";
-import { api, clearToken, getToken } from "@/lib/api";
+import ClipsPanel from "@/components/ClipsPanel";
+import { api, AuthError, AUTH_EXPIRED_EVENT, clearToken, getToken } from "@/lib/api";
 
-export type Tab = "overview" | "analytics" | "topics" | "videos" | "shorts" | "instagram" | "upload" | "logs" | "schedule" | "settings";
+const TABS = ["overview", "analytics", "topics", "videos", "shorts", "clips", "instagram", "upload", "logs", "schedule", "settings"] as const;
+export type Tab = (typeof TABS)[number];
 
 export default function Dashboard() {
   const [tab, setTab]               = useState<Tab>("overview");
@@ -32,13 +34,32 @@ export default function Dashboard() {
     }
     api.me()
       .then(() => setLoggedIn(true))
-      .catch(() => clearToken())
+      .catch((err) => {
+        // Only a real 401 invalidates the token; a cold-start timeout or 5xx
+        // shouldn't log out a user whose session is still valid.
+        if (err instanceof AuthError) clearToken();
+        else setLoggedIn(true);
+      })
       .finally(() => setAuthChecked(true));
+  }, []);
+
+  // Any 401 mid-session (expired token, server session DB wiped by a redeploy) → back to login
+  useEffect(() => {
+    const onExpired = () => setLoggedIn(false);
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  // Deep links: /#clips opens the Clip Maker directly
+  useEffect(() => {
+    const fromHash = window.location.hash.slice(1);
+    if ((TABS as readonly string[]).includes(fromHash)) setTab(fromHash as Tab);
   }, []);
 
   const selectTab = (t: Tab) => {
     setTab(t);
     setDrawerOpen(false); // close drawer when nav item tapped
+    history.replaceState(null, "", `#${t}`);
   };
 
   if (!authChecked) return null;
@@ -79,6 +100,7 @@ export default function Dashboard() {
           {tab === "topics"     && <TopicsPanel />}
           {tab === "videos"     && <VideoGrid />}
           {tab === "shorts"     && <ShortsPanel />}
+          {tab === "clips"      && <ClipsPanel />}
           {tab === "instagram"  && <InstagramPanel />}
           {tab === "upload"     && <UploadPanel />}
           {tab === "logs"       && <LogViewer />}

@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, authedMediaUrl, authHeaders } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, authedMediaUrl, longRequest } from "@/lib/api";
 import type { VideoMeta, VideoScript } from "@/lib/types";
 import { Play, Image as ImageIcon, FileJson, X, Upload, ExternalLink, CheckCircle } from "lucide-react";
 import dynamic from "next/dynamic";
+import RegenerateButton from "@/components/RegenerateButton";
 
 const VideoPreview = dynamic(() => import("./VideoPreview"), { ssr: false });
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 function StatusBadge({ status }: { status: VideoMeta["status"] }) {
   const map: Record<string, { cls: string; label: string }> = {
@@ -37,9 +37,7 @@ function UploadButton({
     setUploading(true);
     setErr("");
     try {
-      const res  = await fetch(`${BASE}/api/upload-generated/${video.date}/${video.index}`, { method: "POST", headers: authHeaders() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Upload failed");
+      const data = await longRequest(`/api/upload-generated/${video.date}/${video.index}`, { method: "POST" });
       onUploaded(video.index, data.video_id, data.url);
     } catch (e: any) {
       setErr(e.message || "Upload failed");
@@ -99,10 +97,12 @@ function VideoCard({
   video,
   onPlay,
   onUploaded,
+  onRegenerating,
 }: {
   video: VideoMeta;
   onPlay: (v: VideoMeta) => void;
   onUploaded: (index: number, videoId: string, url: string) => void;
+  onRegenerating: () => void;
 }) {
   return (
     <div className="glass glass-hover rounded-2xl overflow-hidden transition-all duration-200 group flex flex-col">
@@ -177,8 +177,16 @@ function VideoCard({
         </div>
 
         {/* Upload / YouTube button */}
-        <div className="mt-auto pt-2">
+        <div className="mt-auto pt-2 space-y-1.5">
           <UploadButton video={video} onUploaded={onUploaded} />
+          {video.status !== "uploaded" && (
+            <RegenerateButton
+              isRegenerating={video.is_regenerating}
+              start={() => api.regenerateVideo(video.date, video.index)}
+              title="New script, voice, images and render for this slot (no auto-upload)"
+              onStarted={onRegenerating}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -191,9 +199,18 @@ export default function VideoGrid() {
   const [script, setScript]   = useState<VideoScript | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [loadErr, setLoadErr] = useState("");
+
+  // Errors (e.g. Render cold start > 20 s timeout) must not leave the spinner up forever
+  const refresh = () =>
+    api.videos()
+      .then((r: any) => { setVideos(r.videos); setLoadErr(""); })
+      .catch(() => setLoadErr("Couldn't reach the API — retrying…"))
+      .finally(() => setLoading(false));
+
   useEffect(() => {
-    api.videos().then((r: any) => { setVideos(r.videos); setLoading(false); });
-    const id = setInterval(() => api.videos().then((r: any) => setVideos(r.videos)), 10000);
+    refresh();
+    const id = setInterval(refresh, 10000);
     return () => clearInterval(id);
   }, []);
 
@@ -207,17 +224,22 @@ export default function VideoGrid() {
     );
   };
 
+  // Guards against a slow script fetch for video A landing after video B was opened
+  const openRequest = useRef(0);
+
   const openPlayer = async (v: VideoMeta) => {
+    const req = ++openRequest.current;
+    setScript(null);
     setPlaying(v);
     if (v.has_script) {
       try {
         const s: any = await api.script(v.date, v.index);
-        setScript(s);
-      } catch { setScript(null); }
+        if (req === openRequest.current) setScript(s);
+      } catch { /* player works without the script */ }
     }
   };
 
-  const closePlayer = () => { setPlaying(null); setScript(null); };
+  const closePlayer = () => { openRequest.current++; setPlaying(null); setScript(null); };
 
   if (loading) {
     return (
@@ -238,6 +260,7 @@ export default function VideoGrid() {
           <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
             {videos.length} generated · {uploaded} uploaded · {ready} ready to upload
           </p>
+          {loadErr && <p className="text-xs mt-1 text-red-400">{loadErr}</p>}
         </div>
       </div>
 
@@ -253,7 +276,7 @@ export default function VideoGrid() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {videos.map((v) => (
-            <VideoCard key={v.index} video={v} onPlay={openPlayer} onUploaded={handleUploaded} />
+            <VideoCard key={v.index} video={v} onPlay={openPlayer} onUploaded={handleUploaded} onRegenerating={refresh} />
           ))}
         </div>
       )}

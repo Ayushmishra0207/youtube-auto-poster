@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api, setToken } from "@/lib/api";
+import { api, AuthError, setToken } from "@/lib/api";
 import { Sparkles, Lock } from "lucide-react";
 
 export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
@@ -19,8 +19,13 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
       const res = await api.login(username.trim(), password);
       setToken(res.token);
       onLoggedIn();
-    } catch {
-      setError("Invalid username or password");
+    } catch (err) {
+      // Only a 401 means wrong credentials — a timeout/5xx is the server waking up
+      setError(err instanceof AuthError
+        ? "Invalid username or password"
+        : (err as Error)?.name === "AbortError" || err instanceof TypeError
+          ? "Server is waking up or unreachable — wait a minute and try again"
+          : (err as Error)?.message || "Sign-in failed");
     } finally {
       setBusy(false);
     }
