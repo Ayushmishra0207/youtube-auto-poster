@@ -110,7 +110,9 @@ def render_clip(src: Path, info: MediaInfo, start: float, end: float, out_dir: P
         "-filter_complex", ";".join(chain),
         "-map", "[vout]", *audio_map,
         "-t", f"{dur:.3f}",
-        "-c:v", "libx264", "-preset", os.getenv("CLIPPER_X264_PRESET", "medium"), "-crf", "20",
+        # veryfast ≈ 2-3x quicker than medium; at CRF 20 the size grows a little but
+        # quality stays well above what Shorts/Reels re-encode to anyway
+        "-c:v", "libx264", "-preset", os.getenv("CLIPPER_X264_PRESET", "veryfast"), "-crf", "20",
         "-pix_fmt", "yuv420p", "-profile:v", "high", "-r", str(FPS),
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "-movflags", "+faststart",

@@ -8,6 +8,10 @@ from clipper.modes import CaptionStyle
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 _NON_BMP = re.compile(r"[^\u0000-￿]")           # emojis — fonts here can't draw them
 HINDI_FONT = "Noto Sans Devanagari"
+# \fsp0 is essential: any letter spacing (our styles use 1) makes libass shape each
+# glyph on its own, detaching Devanagari vowel signs (ा ् ि …) from their consonants —
+# "टाइटल्स" rendered as "ट◌ाइटल◌्स".
+HINDI_TAGS = f"\\fn{HINDI_FONT}\\fsp0"
 
 
 def ass_color(hex_rgb: str, alpha: int = 0) -> str:
@@ -84,7 +88,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     hook = _clean(hook_text)
     if hook:
-        hfont = f"{{\\fn{HINDI_FONT}}}" if _DEVANAGARI.search(hook) else ""
+        hfont = f"{{{HINDI_TAGS}}}" if _DEVANAGARI.search(hook) else ""
         events.append(f"Dialogue: 2,{_ts(0)},{_ts(duration)},Hook,,0,0,0,,{{\\fad(250,0)}}{hfont}{hook}")
 
     mark = _clean(watermark)
@@ -101,7 +105,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if st.uppercase:
                 texts = [t if _DEVANAGARI.search(t) else t.upper() for t in texts]
             hindi = any(_DEVANAGARI.search(t) for t in texts)
-            fn = f"\\fn{HINDI_FONT}" if hindi else ""
+            fn = HINDI_TAGS if hindi else ""
             chunk_end = chunk[-1]["end"] + 0.25
             if ci + 1 < len(chunks):
                 chunk_end = min(chunk_end, chunks[ci + 1][0]["start"])

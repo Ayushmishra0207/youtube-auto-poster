@@ -21,17 +21,27 @@ from clipper.modes import Mode
 
 
 def audio_energy(wav: Path) -> np.ndarray:
-    """Loudness in dB for each 1-second bucket (plus onset strength from 0.25 s frames)."""
+    """Loudness in dB for each 1-second bucket (plus onset strength from 0.25 s frames).
+    Streams the file in 10-minute chunks — a 10-hour WAV is ~2.3 GB as float32."""
+    parts: list[np.ndarray] = []
     with wave.open(str(wav), "rb") as wf:
         rate = wf.getframerate()
-        raw = wf.readframes(wf.getnframes())
-    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    if pcm.size == 0:
+        hop = rate // 4                                 # 0.25 s frames
+        chunk_frames = hop * 4 * 600                    # 10 min, multiple of hop
+        while True:
+            raw = wf.readframes(chunk_frames)
+            if not raw:
+                break
+            pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            n = pcm.size // hop
+            if n == 0:
+                break
+            frames = pcm[: n * hop].reshape(n, hop)
+            parts.append(20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-6))
+    if not parts:
         return np.zeros((0, 2), dtype=np.float32)
-    hop = rate // 4                                     # 0.25 s frames
-    n = pcm.size // hop
-    frames = pcm[: n * hop].reshape(n, hop)
-    rms_db = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-6)
+    rms_db = np.concatenate(parts)
+    n = rms_db.size
     onset = np.maximum(0.0, np.diff(rms_db, prepend=rms_db[:1]))
     secs = n // 4
     if secs == 0:
@@ -45,7 +55,7 @@ def scene_cuts(src: Path, threshold: float = 0.32) -> list[float]:
     """Timestamps of hard cuts, from a cheap low-res decode."""
     try:
         err = run_ffmpeg([
-            "-i", str(src), "-an", "-sn",
+            "-threads", "0", "-i", str(src), "-an", "-sn",
             "-vf", f"fps=4,scale=160:-2,select='gt(scene,{threshold})',showinfo",
             "-f", "null", "-",
         ])

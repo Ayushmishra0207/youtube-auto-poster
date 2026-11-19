@@ -65,6 +65,30 @@ def ffmpeg_exe() -> str:
         return found
 
 
+def ffmpeg_dir_for_ytdlp() -> str:
+    """yt-dlp only recognises a binary literally named ffmpeg(.exe) — the bundled
+    imageio build is 'ffmpeg-win-x86_64-vX.exe', which works for merging but made
+    ranged (section) downloads fail with 'ffmpeg is not installed'. Expose it
+    under the expected name via a hard link (copy as fallback) in a cache dir."""
+    exe = Path(ffmpeg_exe())
+    if exe.stem.lower() == "ffmpeg":
+        return str(exe.parent)
+    bin_dir = CLIPS_DIR / "_bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    link = bin_dir / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+    if not link.exists() or link.stat().st_size != exe.stat().st_size:
+        link.unlink(missing_ok=True)
+        try:
+            os.link(exe, link)
+        except OSError:
+            shutil.copy2(exe, link)
+    # yt-dlp's availability check for ranged downloads (FFmpegFD.available)
+    # ignores ffmpeg_location and only searches PATH
+    if str(bin_dir) not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+    return str(bin_dir)
+
+
 def run_ffmpeg(args: list[str], cwd: Path | None = None, timeout: float | None = None) -> str:
     """Run ffmpeg; return stderr. Raise RuntimeError with the stderr tail on failure."""
     cmd = [ffmpeg_exe(), "-hide_banner", "-nostdin", *args]

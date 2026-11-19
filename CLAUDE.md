@@ -109,6 +109,7 @@ renderer.py     ffmpeg: blur-fit or centre-crop reframe, zoom, grade, captions, 
 job.py          orchestration; state in status.json, read by /api/clips*
 ```
 
+- **Long videos (> 15 min, `CLIPPER_FAST_PATH_MIN_MIN`) never download full HD**: analysis uses the audio track + a 144p video-only copy (downloaded in parallel), Whisper runs only on the top signal windows (> 25 min), and each chosen clip is cut frame-exactly from the HD stream URLs with ffmpeg (`downloader.fetch_section`, ~10 s/section; yt-dlp ranged download is the fallback). yt-dlp needs a binary literally named `ffmpeg` on PATH for ranged downloads — `common.ffmpeg_dir_for_ytdlp()` provides it.
 - Dependencies live in `requirements-clipper.txt`, **not** `requirements.txt`: too heavy for Render's free plan. `/api/clips/options` reports `available: false` there and the tab tells the user to run it locally.
 - ffmpeg is the imageio-ffmpeg binary (libass + HarfBuzz). Captions are burned with `ass=` run from the clip dir with relative paths, because Windows drive-letter colons break ffmpeg filter args.
 - `yt-dlp[default]` is required (bundles `yt-dlp-ejs`; without it YouTube returns HTTP 403).
