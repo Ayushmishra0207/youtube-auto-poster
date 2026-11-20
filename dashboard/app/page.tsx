@@ -62,7 +62,19 @@ export default function Dashboard() {
     history.replaceState(null, "", `#${t}`);
   };
 
-  if (!authChecked) return null;
+  // Render's free plan sleeps after ~15 min idle; the first request can take up to a
+  // minute. Say so instead of showing an empty page.
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-6 text-center">
+        <div className="w-7 h-7 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-slate-300">Connecting to the server…</p>
+        <p className="text-xs" style={{ color: "var(--muted)" }}>
+          If it was idle, it needs up to a minute to wake up.
+        </p>
+      </div>
+    );
+  }
   if (!loggedIn) return <LoginScreen onLoggedIn={() => setLoggedIn(true)} />;
 
   return (
