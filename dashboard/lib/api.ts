@@ -1,7 +1,11 @@
 import type { ClipJob, ClipOptions, ClipRequest, InstagramPost } from "./types";
 
-// Trailing slash stripped: "https://x.onrender.com/" would otherwise produce "//api/..." → 404
-export const BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+// Cleaned before use: an invisible BOM/zero-width char pasted into the Vercel env var
+// turned every request into "<vercel-site>/%EF%BB%BFhttps:/…" (404), and a trailing
+// slash would produce "//api/..." (404).
+export const BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
+  .replace(/[\s﻿​-‍⁠]+/g, "")
+  .replace(/\/+$/, "");
 
 // Render free tier cold-starts in 30-60s — the old 20 s limit aborted the first
 // request after every sleep (login said "Invalid password", panels errored).
