@@ -292,13 +292,24 @@ export default function ClipsPanel() {
     }
   }, []);
 
-  useEffect(() => {
+  const loadOptions = useCallback(() => {
     api.clipOptions().then((o) => {
       setOpts(o);
       setReq((r) => ({ ...r, mode: o.default_mode }));
-    }).catch(() => setLoadErr("Can't reach the API — is the backend running?"));
+    }).catch(() => setLoadErr("Couldn't load the Clip Maker settings — the server may be waking up. Retrying…"));
+  }, []);
+
+  useEffect(() => {
+    loadOptions();
     refresh();
-  }, [refresh]);
+  }, [loadOptions, refresh]);
+
+  // If the first load failed (e.g. Render was asleep), keep retrying until it works
+  useEffect(() => {
+    if (opts) return;
+    const id = setInterval(loadOptions, 10000);
+    return () => clearInterval(id);
+  }, [opts, loadOptions]);
 
   const anyActive = jobs.some((j) => j.state === "running" || j.state === "queued");
   useEffect(() => {
@@ -319,6 +330,14 @@ export default function ClipsPanel() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!req.url.trim()) return;
+    if (!opts) {
+      setMsg({ text: "Settings are still loading — try again in a few seconds.", ok: false });
+      return;
+    }
+    if (!opts.available) {
+      setMsg({ text: opts.unavailable_reason, ok: false });
+      return;
+    }
     setSubmitting(true);
     setMsg(null);
     try {
@@ -329,7 +348,17 @@ export default function ClipsPanel() {
         refresh();
       }
     } catch (e: any) {
-      setMsg({ text: e.message?.includes("400") ? "Check the link and options" : "Failed to reach API", ok: false });
+      const m = String(e?.message ?? "");
+      setMsg({
+        text: m.includes("503")
+          ? "Clip Maker isn't available on this server — it runs on your PC (start.bat → localhost)."
+          : m.includes("400")
+            ? "Check the link and options"
+            : m.includes("abort") || e?.name === "AbortError"
+              ? "The server took too long to answer (it may be waking up) — try again in a minute."
+              : `Couldn't start the job: ${m || "server unreachable"}`,
+        ok: false,
+      });
     } finally {
       setSubmitting(false);
     }
