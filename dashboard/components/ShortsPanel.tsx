@@ -142,13 +142,16 @@ function UploadButton({
 }) {
   const [uploading, setUploading] = useState(false);
   const [err, setErr]             = useState("");
+  const [note, setNote]           = useState("");
 
   const handle = async () => {
     setUploading(true);
     setErr("");
     try {
       const data = await longRequest(`/api/shorts/upload/${short.date}/${short.index}`, { method: "POST" });
-      onUploaded(short.index, data.video_id, data.url);
+      // Live server: the upload runs on GitHub Actions — the card flips to "Uploaded" once it finishes
+      if (data.queued) setNote("Upload started — it appears as Uploaded in a few minutes.");
+      else onUploaded(short.index, data.video_id, data.url);
     } catch (e: any) {
       setErr(e.message || "Upload failed");
     } finally {
@@ -199,6 +202,7 @@ function UploadButton({
         )}
       </button>
       {err && <p className="text-[10px] text-center text-red-400 leading-tight">{err}</p>}
+      {note && <p className="text-[10px] text-center text-cyan-300 leading-tight">{note}</p>}
     </div>
   );
 }

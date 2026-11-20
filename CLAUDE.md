@@ -95,6 +95,18 @@ A failed voice clip results in that section being skipped in the video (not a fu
 - After every YouTube upload write `youtube_id.txt` into the item's folder: dashboard status, the duplicate-upload guard and engagement comments all depend on it.
 - Run YouTube metadata through `pipeline/text_utils.fit_youtube_tags` / `fit_youtube_text` (500-char tag budget counting quotes on multi-word tags; 5000 **bytes** of description).
 
+## Cloud deployment (Vercel + Render + Supabase + GitHub Actions)
+
+Step-by-step setup: [DEPLOY.md](DEPLOY.md). Cloud mode switches on when `DATABASE_URL` is set; without it everything is local (SQLite, `output/`, JSON files) exactly as before.
+
+- `db.py` — SQLite or Postgres (Supabase Session pooler, `prepare_threshold=None`); callers write `?` placeholders, the wrapper translates.
+- `pipeline/state_store.py` — named JSON state (`topic_config.json`, `topics_override.json`, `engagement_state.json`, `instagram_queue.json`, `shorts_topic_history.json`, `settings.json`): files locally, `app_state` rows in the cloud. **Use `state_store.mutate()` for read-modify-write**, never load→save across slow work.
+- `pipeline/media_store.py` — cloud index (`media_items`) + Supabase Storage (thumbnail + ≤45 MB preview; full long-form MP4 is the `hd-videos` Actions artifact, 3 days). Every place that finishes a render or an upload calls `media_store.publish(...)` (no-op locally).
+- `cloud_worker.py` — the only entry point GitHub Actions runs (`pipeline`, `regenerate_video`, `generate_short`, `regenerate_short`, `upload`, `engagement`); args arrive as JSON env, never shell-interpolated. Applies dashboard settings overrides before importing `config`.
+- `api/cloud_mode.py` + `api/github_actions.py` — when `CLOUD`, list endpoints read the index, media endpoints 307-redirect to signed URLs, action endpoints `workflow_dispatch` the `autoposter.yml` workflow; "running" state comes from the workflow runs' `run-name` (`"<task> <json args>"` — keep `run_title()` and the workflow's `run-name` in sync).
+- The engagement/Instagram loops don't run inside the Render API in cloud mode (free instances sleep); `.github/workflows/engagement.yml` runs them every 30 min.
+- `tests/test_cloud_store.py` runs against SQLite always and Postgres when `TEST_DATABASE_URL` is set (CI provides a postgres service).
+
 ## Viral Clip Maker (`clipper/`)
 
 Separate from the daily pipeline: paste a YouTube link in the dashboard's **Clip Maker** tab (or `python clip_now.py --url ... --mode gta6_action`) → vertical 1080×1920 captioned clips in `output/clips/<job_id>/clip_NN/`.

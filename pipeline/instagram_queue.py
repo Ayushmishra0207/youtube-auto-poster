@@ -6,51 +6,53 @@ publishAt), so each Short is enqueued here right after its YouTube upload
 (scheduler.py), and a background poller publishes it once the same slot
 time arrives.
 """
-import json
-import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import BASE_DIR
+from config import OUTPUT_DIR
+from pipeline import state_store
 from pipeline.logger import log
 
-INSTAGRAM_QUEUE_FILE = BASE_DIR / "instagram_queue.json"
+QUEUE_KEY = "instagram_queue.json"     # state_store: file locally, app_state row in the cloud
+_DEFAULT = {"posts": []}
 
 
 def _load_state() -> dict:
-    if INSTAGRAM_QUEUE_FILE.exists():
-        try:
-            return json.loads(INSTAGRAM_QUEUE_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            log.warning("instagram_queue.json unreadable — starting fresh")
-    return {"posts": []}
-
-
-def _save_state(state: dict) -> None:
-    # Atomic: a reader must never see a half-written file
-    tmp = INSTAGRAM_QUEUE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, INSTAGRAM_QUEUE_FILE)
-
-
-_QUEUE_LOCK = INSTAGRAM_QUEUE_FILE.with_name("instagram_queue.lock")
+    st = state_store.load(QUEUE_KEY, _DEFAULT)
+    return st if isinstance(st, dict) else {"posts": []}
 
 
 def _mutate(fn):
-    """Re-read → change → save under a cross-process lock. The scheduler (enqueue)
-    and the API's poller (run_pending_posts, which spends minutes publishing)
-    used to each save their own stale copy, silently dropping newly queued Reels."""
-    from pipeline import locking
-    if not locking.acquire_wait(_QUEUE_LOCK, timeout_s=60, poll_s=0.2):
-        raise RuntimeError("instagram_queue.json is locked by another process")
+    """Re-read → change → save atomically (row lock in the cloud, file lock locally).
+    The scheduler (enqueue) and the poller (run_pending_posts, which spends minutes
+    publishing) used to each save their own stale copy, dropping newly queued Reels."""
+    return state_store.mutate(QUEUE_KEY, fn, _DEFAULT)
+
+
+def _cloud_ref(video_path: str) -> str:
+    """In the cloud the worker's disk is gone by publish time — reference the
+    Short's copy in Supabase Storage ("media:<key>") instead of a local path."""
+    from pipeline import media_store
+    if not media_store.enabled():
+        return str(video_path)
+    p = Path(video_path).resolve()
     try:
-        state = _load_state()
-        result = fn(state)
-        _save_state(state)
-        return result
-    finally:
-        locking.release(_QUEUE_LOCK)
+        rel = p.relative_to(Path(OUTPUT_DIR).resolve())   # <date>/short_NN/short.mp4
+    except ValueError:
+        return str(video_path)
+    date, folder = rel.parts[0], rel.parts[1]
+    kind, _, num = folder.partition("_")
+    item = media_store.get_item(date, kind, int(num)) if num.isdigit() else None
+    return f"media:{item['preview_key']}" if item and item.get("preview_key") else str(video_path)
+
+
+def _local_video(video_path: str, tmpdir: str) -> str:
+    if video_path.startswith("media:"):
+        from pipeline import media_store
+        return str(media_store.download(video_path[len("media:"):], Path(tmpdir) / "reel.mp4"))
+    return video_path
 
 
 def enqueue(video_path: str, caption: str, publish_at_utc: datetime) -> str:
@@ -58,7 +60,7 @@ def enqueue(video_path: str, caption: str, publish_at_utc: datetime) -> str:
     entry_id = uuid.uuid4().hex[:12]
     _mutate(lambda state: state.setdefault("posts", []).append({
         "id": entry_id,
-        "video_path": str(video_path),
+        "video_path": _cloud_ref(video_path),
         "caption": caption,
         "publish_at_utc": publish_at_utc.astimezone(timezone.utc).isoformat(),
         "status": "pending",
@@ -125,7 +127,8 @@ def run_pending_posts() -> dict:
         if target > now:
             continue
         try:
-            media_id = publish_reel(p["video_path"], p["caption"])
+            with tempfile.TemporaryDirectory() as td:
+                media_id = publish_reel(_local_video(p["video_path"], td), p["caption"])
             _set_entry(p["id"], status="posted", instagram_media_id=media_id, error=None)
             posted += 1
             log.info("Instagram Reel posted (%s) -> media id %s", p["id"], media_id)

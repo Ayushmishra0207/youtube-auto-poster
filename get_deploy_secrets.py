@@ -5,10 +5,15 @@ needed for Render deployment.
 Usage:
   python get_deploy_secrets.py
 
-Copy the output values into Render → Environment Variables.
+Copy the output values into Render → Environment and GitHub → Settings →
+Secrets and variables → Actions (see DEPLOY.md). Never paste them into chats,
+issues or commits — anyone with YOUTUBE_TOKEN_B64 can post to your channel.
 """
 import base64, json, sys
 from pathlib import Path
+
+# "→" etc. crashed with UnicodeEncodeError when the output was redirected on Windows (cp1252)
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(__file__).parent
 
@@ -38,8 +43,8 @@ else:
 
 # ── Reminder for manual keys ─────────────────────────────────
 print("\n" + "=" * 60)
-print("Also set these manually in Render (from your .env file):")
-print("  ANTHROPIC_API_KEY   = sk-ant-...")
-print("  PEXELS_API_KEY      = your key (optional)")
+print("Also set these (from your .env file / Supabase / GitHub) — see DEPLOY.md:")
+print("  Render + GitHub : DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY, YOUTUBE_TOKEN_B64,")
+print("                    ANTHROPIC_API_KEY, PEXELS_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY")
+print("  Render only     : ADMIN_USERNAME, ADMIN_PASSWORD, GITHUB_DISPATCH_TOKEN, FRONTEND_URL")
 print("=" * 60)
-print("\nDone. Paste the values above into Render dashboard.")

@@ -1,0 +1,102 @@
+# Heavy work for the live deployment: the daily run (14:30 IST) and the
+# dashboard's on-demand jobs (Run Now, Regenerate, Generate Short, Upload).
+# The Render API starts these through the GitHub API (workflow_dispatch).
+# State + previews live in Supabase; full-quality long videos are kept as the
+# "hd-videos" artifact for 3 days for the dashboard's "Upload to YouTube" button.
+#
+# The repo is PUBLIC: run logs are visible to anyone. Secrets are masked, but
+# never print keys/tokens from scripts.
+name: Auto-poster
+# Must stay "<task> <args>" — api/github_actions.run_title() matches on it to show "running…"
+run-name: ${{ github.event_name == 'schedule' && 'pipeline {}' || format('{0} {1}', inputs.task, inputs.args) }}
+
+on:
+  schedule:
+    - cron: "0 9 * * *"          # 09:00 UTC = 14:30 IST (GitHub may start it a little late)
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What to run"
+        required: true
+        default: pipeline
+        type: choice
+        options: [pipeline, regenerate_video, generate_short, regenerate_short, upload]
+      args:
+        description: 'JSON arguments, e.g. {"date":"2026-11-20","index":3}'
+        required: false
+        default: "{}"
+
+permissions:
+  contents: read
+  actions: write                 # download artifacts of earlier runs + keep the schedule enabled
+
+concurrency:
+  # Only full pipeline runs are serialised; other tasks run in parallel.
+  group: ${{ (github.event_name == 'schedule' || inputs.task == 'pipeline') && 'pipeline' || format('task-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      TASK: ${{ inputs.task || 'pipeline' }}
+      TASK_ARGS: ${{ inputs.args || '{}' }}
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      YOUTUBE_TOKEN_B64: ${{ secrets.YOUTUBE_TOKEN_B64 }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+      INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+      INSTAGRAM_BUSINESS_ACCOUNT_ID: ${{ secrets.INSTAGRAM_BUSINESS_ACCOUNT_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt "psycopg[binary]>=3.2"
+
+      - name: Cache fonts and music
+        uses: actions/cache@v4
+        with:
+          path: |
+            assets/fonts
+            assets/music
+          key: assets-${{ hashFiles('setup_fonts.py') }}
+
+      - name: Fonts
+        run: python setup_fonts.py
+
+      - name: Run task
+        run: python cloud_worker.py "$TASK"
+
+      - name: Keep full-quality videos (3 days, for "Upload to YouTube")
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hd-videos
+          path: output/*/video_*/final.mp4
+          retention-days: 3
+          if-no-files-found: ignore
+          compression-level: 0
+
+      - name: Keep the daily schedule enabled
+        # GitHub disables cron workflows after 60 days without repository activity
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/autoposter.yml/enable"

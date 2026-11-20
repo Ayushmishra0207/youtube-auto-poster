@@ -1,0 +1,54 @@
+# Light recurring work that used to run inside the API process (which sleeps on
+# Render's free plan): CTA comments on new uploads, Community-post drafts, and
+# publishing queued Instagram Reels when their slot arrives.
+name: Engagement
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engagement
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      YOUTUBE_TOKEN_B64: ${{ secrets.YOUTUBE_TOKEN_B64 }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+      INSTAGRAM_BUSINESS_ACCOUNT_ID: ${{ secrets.INSTAGRAM_BUSINESS_ACCOUNT_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+    steps:
+      - name: Skip until Supabase is configured
+        id: gate
+        run: |
+          if [ -z "$DATABASE_URL" ]; then echo "DATABASE_URL secret not set — nothing to do"; echo "skip=1" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != '1'
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.skip != '1'
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        if: steps.gate.outputs.skip != '1'
+        run: pip install -r requirements.txt "psycopg[binary]>=3.2"
+      - name: Engagement + Instagram pass
+        if: steps.gate.outputs.skip != '1'
+        run: python cloud_worker.py engagement

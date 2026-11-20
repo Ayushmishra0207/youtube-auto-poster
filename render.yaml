@@ -6,6 +6,23 @@ services:
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT --no-access-log
     plan: free
     envVars:
+      # ── Cloud mode: Supabase (state + media) and GitHub Actions (heavy work) ──
+      # DATABASE_URL: Supabase → Project Settings → Database → "Session pooler" URI
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      # Supabase → Project Settings → API Keys → secret key (sb_secret_…) or legacy service_role
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: GITHUB_REPO
+        value: Ayushmishra0207/youtube-auto-poster
+      # Fine-grained token for this repo with "Actions: Read and write"
+      - key: GITHUB_DISPATCH_TOKEN
+        sync: false
+      # Your Vercel URL, e.g. https://youtube-auto-poster.vercel.app (CORS)
+      - key: FRONTEND_URL
+        sync: false
       - key: YOUTUBE_TOKEN_B64
         sync: false
       - key: ANTHROPIC_API_KEY

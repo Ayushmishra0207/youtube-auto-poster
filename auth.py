@@ -22,7 +22,7 @@ def _hash_password(password: str, salt: str) -> str:
 
 
 def create_user(username: str, password: str) -> int:
-    """Create a new login user. Raises sqlite3.IntegrityError if username is taken."""
+    """Create a new login user. Raises db.IntegrityError if username is taken."""
     salt = secrets.token_hex(16)
     password_hash = _hash_password(password, salt)
     with db_cursor() as cur:

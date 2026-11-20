@@ -63,7 +63,14 @@ import auth as auth_module
 from config import ENGAGEMENT_POLL_SECONDS, INSTAGRAM_POLL_SECONDS, UPLOAD_SLOTS_IST
 from db import init_db
 from pipeline.locales import DEFAULT_LOCALE, LOCALES, locales_by_continent
-from pipeline import locking
+from pipeline import locking, state_store
+import db as db_module
+
+# Cloud mode (Render + Supabase + GitHub Actions) — see api/cloud_mode.py.
+# Locally (no DATABASE_URL) everything below behaves exactly as before.
+CLOUD = db_module.is_postgres()
+if CLOUD:
+    from api import cloud_mode
 from pipeline.logger import log
 from pipeline.text_utils import YT_DESCRIPTION_MAX_BYTES, fit_youtube_tags, fit_youtube_text
 
@@ -124,8 +131,9 @@ async def _startup():
     if admin_username and admin_password:
         auth_module.ensure_user(admin_username, admin_password)
         log.info(f"Bootstrapped admin user '{admin_username}' from env vars")
-    asyncio.create_task(_engagement_loop())
-    asyncio.create_task(_instagram_loop())
+    if not CLOUD:   # in the cloud .github/workflows/engagement.yml does this every 30 min
+        asyncio.create_task(_engagement_loop())
+        asyncio.create_task(_instagram_loop())
 
 
 # The background loop and the "generate now" endpoint both run the engagement
@@ -326,14 +334,10 @@ def _short_lock_pid_alive() -> bool:
     return locking.lock_owner(SHORT_LOCK_FILE) is not None
 
 def _load_topic_config() -> dict:
-    # Cloud: seed from env var on first boot if file doesn't exist
-    if not TOPIC_CONFIG.exists():
-        seed = os.environ.get("TOPIC_CONFIG_JSON", "")
-        if seed:
-            TOPIC_CONFIG.write_text(seed, encoding="utf-8")
-    if TOPIC_CONFIG.exists():
-        return json.loads(TOPIC_CONFIG.read_text(encoding="utf-8"))
-    return {"slots": [], "categories": {}}
+    # state_store: topic_config.json locally; the database in the cloud (seeded from
+    # TOPIC_CONFIG_JSON or the repo's topic_config.json on first use)
+    cfg = state_store.load(TOPIC_CONFIG.name, {"slots": [], "categories": {}})
+    return cfg if isinstance(cfg, dict) else {"slots": [], "categories": {}}
 
 def _get_youtube_credentials():
     from google.auth.transport.requests import Request
@@ -366,10 +370,15 @@ def _get_analytics_service():
 
 @app.get("/api/status")
 def status():
-    today_dir = OUTPUT_DIR / _today()
-    video_count = len(list(today_dir.glob("video_*"))) if today_dir.exists() else 0
+    if CLOUD:
+        from pipeline import media_store
+        video_count = len(media_store.list_items(_today(), "video"))
+        is_running = cloud_mode.pipeline_running()
+    else:
+        today_dir = OUTPUT_DIR / _today()
+        video_count = len(list(today_dir.glob("video_*"))) if today_dir.exists() else 0
+        is_running = _pipeline_running() or _lock_pid_alive()
     last_log = _tail_log(1)
-    is_running = _pipeline_running() or _lock_pid_alive()
     return {
         "is_running": is_running,
         "today_date": _today(),
@@ -386,6 +395,8 @@ def status():
 @app.get("/api/videos")
 def list_videos(date: Optional[str] = None):
     target = _valid_date(date or _today())
+    if CLOUD:
+        return {"date": target, "videos": cloud_mode.list_items("video", target, UPLOAD_SLOTS)}
     today_dir = OUTPUT_DIR / target
     videos = []
     if today_dir.exists():
@@ -445,6 +456,9 @@ class RegenerateVideoPayload(BaseModel):
 async def regenerate_video(date: str, index: int, payload: RegenerateVideoPayload = RegenerateVideoPayload()):
     """Regenerate an existing video slot in place (new script/voice/images/render, no auto-upload)."""
     _valid_date(date)
+    if CLOUD:
+        return cloud_mode.start("regenerate_video", {"date": date, "index": index},
+                                "This video is already being regenerated.")
     key = _regen_key("video", date, index)
     if _regen_running(key) or _pipeline_running() or _lock_pid_alive():
         return {"ok": False, "message": "A video generation/regeneration is already in progress"}
@@ -492,11 +506,8 @@ async def get_locales():
 
 @app.get("/api/topics")
 async def get_topics():
-    if TOPICS_FILE.exists():
-        try:
-            return {"topics": json.loads(TOPICS_FILE.read_text(encoding="utf-8")), "source": "override"}
-        except Exception:
-            pass
+    if state_store.exists(TOPICS_FILE.name):
+        return {"topics": state_store.load(TOPICS_FILE.name, []), "source": "override"}
     return {"topics": [], "source": "auto"}
 
 class TopicsPayload(BaseModel):
@@ -504,13 +515,12 @@ class TopicsPayload(BaseModel):
 
 @app.post("/api/topics")
 async def set_topics(payload: TopicsPayload):
-    TOPICS_FILE.write_text(json.dumps(payload.topics, ensure_ascii=False, indent=2), encoding="utf-8")
+    state_store.save(TOPICS_FILE.name, payload.topics)
     return {"ok": True, "topics": payload.topics}
 
 @app.delete("/api/topics")
 async def clear_topics():
-    if TOPICS_FILE.exists():
-        TOPICS_FILE.unlink()
+    state_store.delete(TOPICS_FILE.name)
     return {"ok": True, "source": "auto"}
 
 
@@ -531,9 +541,12 @@ class TopicConfigPayload(BaseModel):
 
 @app.put("/api/topic-config")
 async def save_topic_config(payload: TopicConfigPayload):
-    config = _load_topic_config()
-    config["slots"] = [s.model_dump() for s in payload.slots]
-    TOPIC_CONFIG.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    slots = [s.model_dump() for s in payload.slots]
+
+    def apply(cfg: dict) -> None:
+        cfg.setdefault("categories", {})
+        cfg["slots"] = slots
+    state_store.mutate(TOPIC_CONFIG.name, apply, {"slots": [], "categories": {}})
     return {"ok": True}
 
 
@@ -778,6 +791,8 @@ async def manual_upload(
 @app.post("/api/upload-generated/{date}/{index}")
 async def upload_generated_video(date: str, index: int):
     """Upload an already-generated pipeline video to YouTube."""
+    if CLOUD:
+        return cloud_mode.upload("video", _valid_date(date), index)
     vdir       = _video_dir(date, index)
     video_path = vdir / "final.mp4"
     thumb_path = vdir / "thumbnail.jpg"
@@ -881,6 +896,8 @@ async def upload_generated_video(date: str, index: int):
 async def run_pipeline():
     global _pipeline_proc
 
+    if CLOUD:
+        return cloud_mode.start("pipeline", {}, "Pipeline is already running")
     if _pipeline_running() or _lock_pid_alive():
         return {"ok": False, "message": "Pipeline is already running"}
     # A running "Regenerate" writes into the same video_NN folders the pipeline would
@@ -934,6 +951,9 @@ def _ensure_short_thumbnail(short_dir: Path) -> bool:
 @app.get("/api/shorts")
 def list_shorts(date: Optional[str] = None):
     target = _valid_date(date or _today())
+    if CLOUD:
+        return {"date": target, "shorts": cloud_mode.list_items("short", target, UPLOAD_SLOTS),
+                "is_generating": cloud_mode.short_generating()}
     today_dir = OUTPUT_DIR / target
     shorts = []
     if today_dir.exists():
@@ -982,6 +1002,8 @@ def list_shorts(date: Optional[str] = None):
 
 @app.get("/api/shorts/{date}/{index}/thumbnail")
 def serve_short_thumbnail(date: str, index: int):
+    if CLOUD:
+        return cloud_mode.media_redirect("short", _valid_date(date), index, "thumbnail")
     short_dir = _short_dir(date, index)
     path = short_dir / "thumbnail.jpg"
     if not path.exists():
@@ -991,14 +1013,18 @@ def serve_short_thumbnail(date: str, index: int):
     return FileResponse(path, media_type="image/jpeg")
 
 @app.get("/api/shorts/{date}/{index}/video")
-async def serve_short_video(date: str, index: int):
+def serve_short_video(date: str, index: int):
+    if CLOUD:
+        return cloud_mode.media_redirect("short", _valid_date(date), index, "video")
     path = _short_dir(date, index) / "short.mp4"
     if not path.exists():
         raise HTTPException(404, "Video not found")
     return FileResponse(path, media_type="video/mp4")
 
 @app.get("/api/shorts/{date}/{index}/script")
-async def serve_short_script(date: str, index: int):
+def serve_short_script(date: str, index: int):
+    if CLOUD:
+        return cloud_mode.script("short", _valid_date(date), index)
     path = _short_dir(date, index) / "script.json"
     if not path.exists():
         raise HTTPException(404, "Script not found")
@@ -1030,6 +1056,11 @@ async def generate_short(payload: GenerateShortPayload):
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
     count = max(1, min(payload.count, 10))
 
+    if CLOUD:
+        return cloud_mode.start("generate_short", {"feed": payload.feed, "topic": topic, "count": count,
+                                                   "content_type": payload.content_type or "news",
+                                                   "locale": payload.locale},
+                                "A Short is already being generated")
     if _short_proc_running() or _short_lock_pid_alive():
         return {"ok": False, "message": "A Short is already being generated"}
 
@@ -1059,10 +1090,7 @@ class RegenerateShortPayload(BaseModel):
 @app.post("/api/shorts/{date}/{index}/regenerate")
 async def regenerate_short(date: str, index: int, payload: RegenerateShortPayload):
     """Regenerate an existing Short in place (new script + render, no auto-upload)."""
-    key = _regen_key("short", date, index)
-    if _regen_running(key) or _short_proc_running() or _short_lock_pid_alive():
-        return {"ok": False, "message": "A Short generation/regeneration is already in progress"}
-
+    _valid_date(date)   # reaches a filesystem path in generate_short_now.py
     topic = payload.topic.strip()
     if not topic and payload.feed not in ("india", "world", "business", "entertainment", "sports"):
         raise HTTPException(400, "feed must be one of: india, world, business, entertainment, sports")
@@ -1070,6 +1098,15 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
         raise HTTPException(400, f"content_type must be one of: {', '.join(_SHORT_CONTENT_TYPES)}")
     if payload.locale not in LOCALES:
         raise HTTPException(400, f"Unknown locale '{payload.locale}'")
+    if CLOUD:
+        return cloud_mode.start("regenerate_short", {"date": date, "index": index, "feed": payload.feed,
+                                                     "topic": topic, "content_type": payload.content_type or "news",
+                                                     "locale": payload.locale},
+                                "This Short is already being regenerated.")
+
+    key = _regen_key("short", date, index)
+    if _regen_running(key) or _short_proc_running() or _short_lock_pid_alive():
+        return {"ok": False, "message": "A Short generation/regeneration is already in progress"}
 
     args = [PYTHON, str(BASE_DIR / "generate_short_now.py"), "--date", date, "--index", str(index),
             "--locale", payload.locale, "--content-type", payload.content_type or "news"]
@@ -1087,6 +1124,8 @@ async def regenerate_short(date: str, index: int, payload: RegenerateShortPayloa
 @app.post("/api/shorts/upload/{date}/{index}")
 async def upload_generated_short(date: str, index: int):
     """Upload an already-generated Short to YouTube as a Short (#Shorts)."""
+    if CLOUD:
+        return cloud_mode.upload("short", _valid_date(date), index)
     sdir       = _short_dir(date, index)
     video_path = sdir / "short.mp4"
     thumb_path = sdir / "thumbnail.jpg"
@@ -1408,6 +1447,8 @@ async def upload_clip(job_id: str, index: int):
 
 @app.get("/api/logs")
 async def get_logs(lines: int = 150):
+    if CLOUD:   # generation logs live on GitHub Actions; show where + what's running
+        return {"logs": cloud_mode.log_lines() + _tail_log(lines)}
     return {"logs": _tail_log(lines)}
 
 
@@ -1434,8 +1475,11 @@ class SettingsPayload(BaseModel):
 @app.get("/api/settings")
 async def get_settings():
     # On Render the keys are real environment variables, not .env lines — show both
-    # (previously every key looked "unset" in production).
+    # (previously every key looked "unset" in production). In the cloud, non-secret
+    # values saved from this page live in the database (applied by cloud_worker.py).
     env = {**os.environ, **_read_env()}
+    if CLOUD:
+        env.update({k: str(v) for k, v in (state_store.load("settings.json", {}) or {}).items()})
     return {
         "ANTHROPIC_API_KEY": "***" if env.get("ANTHROPIC_API_KEY") else "",
         "PEXELS_API_KEY": "***" if env.get("PEXELS_API_KEY") else "",
@@ -1459,29 +1503,49 @@ async def get_settings():
 @app.post("/api/settings")
 async def save_settings(payload: SettingsPayload):
     updates = {k: v for k, v in payload.model_dump().items() if v is not None and v != "***"}
+    if CLOUD:
+        # Render's disk is wiped on deploy and GitHub runners never see it: keep
+        # non-secret settings in the database; keys belong in Render/GitHub secrets.
+        secret = sorted(k for k in updates if k not in _CLOUD_EDITABLE_SETTINGS)
+        if secret:
+            raise HTTPException(400, "On the live server, API keys and tokens are set as secrets in Render "
+                                     f"and GitHub (Settings → Secrets), not here: {', '.join(secret)}")
+        if updates:
+            state_store.mutate("settings.json", lambda st: st.update(updates), {})
+        return {"ok": True}
     if updates:
         _write_env(updates)
     return {"ok": True}
 
 
+# Must match cloud_worker.OVERRIDABLE (applied before config.py is imported on the runner)
+_CLOUD_EDITABLE_SETTINGS = {"KEEP_OUTPUT_DAYS", "TTS_VOICE", "TTS_RATE", "TTS_PITCH", "SHORTS_PER_DAY"}
+
+
 # ── File serving ───────────────────────────────────────────────────────────────
 
 @app.get("/api/videos/{date}/{index}/thumbnail")
-async def serve_thumbnail(date: str, index: int):
+def serve_thumbnail(date: str, index: int):
+    if CLOUD:
+        return cloud_mode.media_redirect("video", _valid_date(date), index, "thumbnail")
     path = _video_dir(date, index) / "thumbnail.jpg"
     if not path.exists():
         raise HTTPException(404, "Thumbnail not found")
     return FileResponse(path, media_type="image/jpeg")
 
 @app.get("/api/videos/{date}/{index}/video")
-async def serve_video(date: str, index: int):
+def serve_video(date: str, index: int):
+    if CLOUD:
+        return cloud_mode.media_redirect("video", _valid_date(date), index, "video")
     path = _video_dir(date, index) / "final.mp4"
     if not path.exists():
         raise HTTPException(404, "Video not found")
     return FileResponse(path, media_type="video/mp4")
 
 @app.get("/api/videos/{date}/{index}/script")
-async def serve_script(date: str, index: int):
+def serve_script(date: str, index: int):
+    if CLOUD:
+        return cloud_mode.script("video", _valid_date(date), index)
     path = _video_dir(date, index) / "script.json"
     if not path.exists():
         raise HTTPException(404, "Script not found")

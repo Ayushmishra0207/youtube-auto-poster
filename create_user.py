@@ -7,11 +7,11 @@ Usage:
 """
 import argparse
 import getpass
-import sqlite3
+
 import sys
 
 from auth import create_user
-from db import init_db
+from db import IntegrityError, init_db
 
 
 def main():
@@ -28,7 +28,7 @@ def main():
     init_db()
     try:
         user_id = create_user(args.username, password)
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         print(f"Username '{args.username}' already exists.")
         sys.exit(1)
 

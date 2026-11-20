@@ -21,7 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config import BASE_DIR, OUTPUT_DIR
 from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
-from pipeline import locking
+from pipeline import locking, media_store
 from pipeline.logger import log
 from pipeline.news_fetcher import get_breaking_headlines
 from pipeline.script_generator import generate_shorts_script, generate_shorts_script_from_topic
@@ -94,7 +94,11 @@ def _today_output_dir() -> Path:
 
 def _next_short_index(base_dir: Path) -> int:
     existing = [int(p.name.split("_")[1]) for p in base_dir.glob("short_*") if p.name.split("_")[1].isdigit()]
-    return (max(existing) + 1) if existing else 1
+    local_max = max(existing) if existing else 0
+    # In the cloud each GitHub run starts with an empty disk: Shorts made by
+    # earlier runs today only exist in the index — never reuse their numbers.
+    cloud_max = media_store.max_index(base_dir.name, "short") if media_store.enabled() else 0
+    return max(local_max, cloud_max) + 1
 
 
 def _acquire_lock() -> bool:
@@ -123,6 +127,7 @@ def generate_one_short(base_dir: Path, feed: str, topic: str, index: int, locale
 
     category = content_type if topic.strip() else "news"
     create_short(script, str(work_dir), category=category, locale=locale)
+    media_store.publish(work_dir, base_dir.name, "short", index)   # cloud index; no-op locally
     log.info("[manual-short %d] Done: %s", index, work_dir)
     return work_dir
 

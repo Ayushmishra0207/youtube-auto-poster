@@ -17,6 +17,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config import NEWS_CATEGORIES, NEWS_TTS_RATE, OUTPUT_DIR
+from pipeline import media_store
 from pipeline.locales import get_locale
 from pipeline.logger import log
 from scheduler import _load_slot_plan, _run_single_video
@@ -79,6 +80,7 @@ def main():
         shutil.rmtree(work_dir, ignore_errors=True)
     shutil.move(str(new_dir), str(work_dir))
     shutil.rmtree(staging, ignore_errors=True)
+    media_store.publish(work_dir, args.date, "video", args.index, plan["slot"])   # cloud index; no-op locally
 
     log.info("[regen-video %d] Done: %s", args.index, meta["title"])
 

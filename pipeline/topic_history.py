@@ -12,14 +12,12 @@ Two layers of defense, both driven by this module:
      an explicit "don't repeat these" list, for the LLM's own judgment
      within whatever headlines remain.
 """
-import json
 import re
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from config import BASE_DIR
+from pipeline import state_store
 
-HISTORY_FILE = BASE_DIR / "shorts_topic_history.json"
+HISTORY_KEY = "shorts_topic_history.json"
 HISTORY_TTL_HOURS = 72
 MAX_HISTORY_ENTRIES = 200
 _DUPLICATE_OVERLAP_THRESHOLD = 0.5
@@ -52,11 +50,10 @@ def _fingerprint(text: str) -> tuple:
 
 
 def _load() -> list:
-    if not HISTORY_FILE.exists():
-        return []
-    try:
-        data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    # state_store: the JSON file locally, the app_state table in the cloud
+    # (GitHub runners start empty every run, so a file would forget everything)
+    data = state_store.load(HISTORY_KEY, [])
+    if not isinstance(data, list):
         return []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HISTORY_TTL_HOURS)
     fresh = []
@@ -70,9 +67,7 @@ def _load() -> list:
 
 
 def _save(entries: list) -> None:
-    HISTORY_FILE.write_text(
-        json.dumps(entries[-MAX_HISTORY_ENTRIES:], ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    state_store.save(HISTORY_KEY, entries[-MAX_HISTORY_ENTRIES:])
 
 
 def record_topic(title: str) -> None:

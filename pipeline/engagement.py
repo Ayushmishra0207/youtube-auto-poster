@@ -10,31 +10,38 @@ Post-upload engagement automation, run on a poll loop (see api/main.py):
      into YouTube Studio, not auto-published.
 
 State (which items were already commented on, and the draft queue) persists
-in ENGAGEMENT_STATE_FILE so a restart doesn't re-comment or lose drafts.
+via pipeline.state_store ("engagement_state.json" locally, the app_state table
+in the cloud) so a restart doesn't re-comment or lose drafts.
 """
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import BASE_DIR, ENGAGEMENT_AUTO_COMMENT, ENGAGEMENT_MAX_DRAFTS, OUTPUT_DIR
+from config import ENGAGEMENT_AUTO_COMMENT, ENGAGEMENT_MAX_DRAFTS, OUTPUT_DIR
+from pipeline import media_store, state_store
 from pipeline.locales import get_locale
 from pipeline.logger import log
 from pipeline.uploader import post_engagement_comment
 
-ENGAGEMENT_STATE_FILE = BASE_DIR / "engagement_state.json"
+STATE_KEY = "engagement_state.json"
+_DEFAULT_STATE = {"commented": [], "drafts": []}
 
 
 def _load_state() -> dict:
-    if ENGAGEMENT_STATE_FILE.exists():
-        try:
-            return json.loads(ENGAGEMENT_STATE_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            log.warning("engagement_state.json unreadable — starting fresh")
-    return {"commented": [], "drafts": []}
+    state = state_store.load(STATE_KEY, _DEFAULT_STATE)
+    return state if isinstance(state, dict) else dict(_DEFAULT_STATE)
 
 
-def _save_state(state: dict) -> None:
-    ENGAGEMENT_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+def _iter_uploaded():
+    """Yield (kind, key, youtube_id, script) for every uploaded video/Short."""
+    if media_store.enabled():   # cloud: outputs live in the index, not on this disk
+        for it in media_store.list_items():
+            if it.get("youtube_id"):
+                key = f"{it['date']}/{it['kind']}_{it['index']:02d}"
+                yield it["kind"], key, it["youtube_id"], it.get("script") or {}
+        return
+    for kind, key, item_dir in _iter_uploaded_items():
+        yield kind, key, (item_dir / "youtube_id.txt").read_text().strip(), _read_script(item_dir)
 
 
 def _iter_uploaded_items():
@@ -70,34 +77,25 @@ def run_engagement_pass() -> dict:
     state = _load_state()
     commented = set(state.get("commented", []))
     drafts = state.get("drafts", [])
-    posted_now = 0
-    latest = None  # (kind, key, item_dir, script) — most recent upload seen this pass
+    newly_commented: set[str] = set()
+    new_draft = None
+    latest = None  # (kind, key, script) — most recent upload seen this pass
 
-    for kind, key, item_dir in _iter_uploaded_items():
-        script = _read_script(item_dir)
+    for kind, key, yt_id, script in _iter_uploaded():
         locale = get_locale(script.get("_locale") or "hi")
-        latest = (kind, key, item_dir, script)
+        latest = (kind, key, script)
 
-        if key in commented:
-            continue
-        if not ENGAGEMENT_AUTO_COMMENT:
+        if key in commented or not ENGAGEMENT_AUTO_COMMENT or not yt_id:
             continue
 
-        yt_id = (item_dir / "youtube_id.txt").read_text().strip()
-        if not yt_id:
-            continue
-
-        comment_text = f"{locale.like_share_cta} \U0001F4AC"  # speech-balloon emoji
+        comment_text = f"{locale.like_share_cta} 💬"  # speech-balloon emoji
         if post_engagement_comment(yt_id, comment_text):
-            commented.add(key)
-            posted_now += 1
-
-    state["commented"] = sorted(commented)
+            newly_commented.add(key)
 
     # Top up the draft queue from the single most recent upload, if it doesn't
     # already have a pending draft and we're under the cap.
     if latest and len(drafts) < ENGAGEMENT_MAX_DRAFTS:
-        kind, key, item_dir, script = latest
+        kind, key, script = latest
         already_drafted = any(d.get("source") == key for d in drafts)
         title = script.get("title", "")
         if not already_drafted and title:
@@ -105,30 +103,39 @@ def run_engagement_pass() -> dict:
                 from pipeline.community_post import generate_community_post
                 locale = get_locale(script.get("_locale") or "hi")
                 draft = generate_community_post(title, script.get("description", ""), locale=locale)
-                drafts.append({
+                new_draft = {
                     "id": f"{key.replace('/', '-')}",
                     "text": draft.get("text", ""),
                     "hashtags": draft.get("hashtags", []),
                     "source": key,
                     "kind": kind,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                })
+                }
                 log.info("Community post draft generated for %s", key)
             except Exception as exc:
                 log.warning("Community post draft generation failed for %s: %s", key, exc)
 
-    state["drafts"] = drafts[-ENGAGEMENT_MAX_DRAFTS:]
-    _save_state(state)
-    return {"posted_comments": posted_now, "draft_count": len(state["drafts"])}
+    # Merge into the *current* state: the pass took a while (comments, an LLM call)
+    # and a draft may have been dismissed meanwhile — don't resurrect it.
+    def apply(st: dict) -> int:
+        st["commented"] = sorted(set(st.get("commented", [])) | newly_commented)
+        ds = st.setdefault("drafts", [])
+        if new_draft and not any(d.get("source") == new_draft["source"] for d in ds):
+            ds.append(new_draft)
+        st["drafts"] = ds[-ENGAGEMENT_MAX_DRAFTS:]
+        return len(st["drafts"])
+
+    draft_count = state_store.mutate(STATE_KEY, apply, _DEFAULT_STATE)
+    return {"posted_comments": len(newly_commented), "draft_count": draft_count}
 
 
 def dismiss_draft(draft_id: str) -> bool:
     """Remove a draft from the queue (after it's been posted manually, or to discard it)."""
-    state = _load_state()
-    before = len(state.get("drafts", []))
-    state["drafts"] = [d for d in state.get("drafts", []) if d.get("id") != draft_id]
-    _save_state(state)
-    return len(state["drafts"]) < before
+    def apply(st: dict) -> bool:
+        before = len(st.get("drafts", []))
+        st["drafts"] = [d for d in st.get("drafts", []) if d.get("id") != draft_id]
+        return len(st["drafts"]) < before
+    return state_store.mutate(STATE_KEY, apply, _DEFAULT_STATE)
 
 
 def list_drafts() -> list:

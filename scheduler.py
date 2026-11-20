@@ -15,7 +15,6 @@ Run as a background service:
 Or run once immediately:
   python scheduler.py --now
 """
-import json
 import shutil
 import sys
 # Force UTF-8 output so Hindi titles print correctly on Windows
@@ -40,7 +39,7 @@ from config import (
     GENERATION_LEAD_HOURS,
 )
 from generate_short_now import SHORT_LOCK_FILE, _next_short_index, build_short_script
-from pipeline import locking
+from pipeline import locking, media_store, state_store
 from pipeline.image_fetcher import fetch_all_section_images
 from pipeline.locales import DEFAULT_LOCALE, Locale, get_locale
 from pipeline.logger import log
@@ -131,6 +130,7 @@ def _cleanup_old_output():
             removed += 1
     if removed:
         log.info("Disk cleanup: removed %d old output directories", removed)
+    media_store.cleanup(KEEP_OUTPUT_DAYS)   # cloud index + stored previews (no-op locally)
 
 
 # ___ Step helpers _____________________________________________________________
@@ -152,20 +152,20 @@ def _load_slot_plan() -> list[dict]:
     categories = {}
     slot_categories = []
 
-    if TOPIC_CONFIG_FILE.exists():
-        try:
-            cfg = json.loads(TOPIC_CONFIG_FILE.read_text(encoding="utf-8"))
-            categories   = cfg.get("categories", {})
-            slot_categories = cfg.get("slots", [])
-        except Exception as e:
-            log.warning("Could not read topic_config.json: %s", e)
+    # state_store: the JSON files locally; in the cloud the dashboard's saved
+    # config lives in the database (a GitHub runner only has the repo's copy)
+    try:
+        cfg = state_store.load(TOPIC_CONFIG_FILE.name, {}) or {}
+        categories   = cfg.get("categories", {})
+        slot_categories = cfg.get("slots", [])
+    except Exception as e:
+        log.warning("Could not read topic_config.json: %s", e)
 
     override_topics: list = []
-    if TOPICS_OVERRIDE.exists():
-        try:
-            override_topics = json.loads(TOPICS_OVERRIDE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    try:
+        override_topics = state_store.load(TOPICS_OVERRIDE.name, []) or []
+    except Exception:
+        pass
 
     plan = []
     for i, slot_str in enumerate(UPLOAD_SLOTS_IST):
@@ -311,6 +311,7 @@ def _run_single_video(topic: str, slot_str: str, index: int, base_dir: Path,
         log.info("[%d] Rendering video...", index)
         create_video(script, voices, images, video_path, category=category, locale=locale)
         log.info("[%d] Video ready: %s", index, video_path)
+        media_store.publish(work_dir, base_dir.name, "video", index, slot_str)   # cloud only; no-op locally
 
         return {
             "path":           video_path,
@@ -395,6 +396,8 @@ def _run_pipeline_locked():
                 yt_language=v.get("yt_language", "hi"),
             )
             _save_youtube_id(Path(v["path"]).parent, vid_id)
+            media_store.publish(Path(v["path"]).parent, base_dir.name, "video",
+                                int(Path(v["path"]).parent.name.split("_")[1]), v["slot"])
             upload_thumbnail(vid_id, v["thumbnail_path"])
         except Exception as e:
             log.error("Upload failed for '%s': %s", v["title"][:60], e, exc_info=True)
@@ -464,6 +467,8 @@ def _run_shorts_locked(base_dir: Path, run_start: datetime | None):
 
             # 3. Render vertical short (voice at 1.5x inside)
             video_path = create_short(script, str(work_dir), category="news", locale=locale)
+            short_idx = int(work_dir.name.split("_")[1])
+            media_store.publish(work_dir, base_dir.name, "short", short_idx)
 
             # 4. Upload with a scheduled publish slot
             slot = SHORTS_UPLOAD_SLOTS[(i - 1) % len(SHORTS_UPLOAD_SLOTS)]
@@ -481,6 +486,7 @@ def _run_shorts_locked(base_dir: Path, run_start: datetime | None):
                 yt_language=locale.yt_language,
             )
             _save_youtube_id(work_dir, short_id)
+            media_store.publish(work_dir, base_dir.name, "short", short_idx)   # before IG enqueue (needs its storage copy)
 
             try:
                 from pipeline.instagram_queue import enqueue as ig_enqueue
