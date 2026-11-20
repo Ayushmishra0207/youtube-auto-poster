@@ -226,7 +226,7 @@ async def _require_auth(request: Request, call_next):
         return await call_next(request)
 
     token = _session_token_from_request(request)
-    user = auth_module.get_user_for_session(token)
+    user = await _cached_session_user(token)
     if not user:
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"},
                             headers=_cors_headers_for(request))
@@ -248,9 +248,36 @@ def login(payload: LoginPayload):
     return {"token": token, "username": payload.username}
 
 @app.post("/api/auth/logout")
-async def logout(request: Request):
-    auth_module.delete_session(_session_token_from_request(request))
+def logout(request: Request):
+    token = _session_token_from_request(request)
+    _session_cache.pop(token, None)
+    auth_module.delete_session(token)
     return {"ok": True}
+
+
+# Every request checks its session. Doing that DB query inline in this async
+# middleware blocked the event loop (the whole API) for each lookup — with the
+# DB across the Pacific that queued polling requests for up to a minute.
+# Look sessions up in a worker thread and remember valid ones briefly.
+_session_cache: dict[str, tuple[float, dict]] = {}
+_SESSION_CACHE_TTL = 60.0
+
+
+async def _cached_session_user(token: str) -> dict | None:
+    if not token:
+        return None
+    hit = _session_cache.get(token)
+    now = time.time()
+    if hit and now - hit[0] < _SESSION_CACHE_TTL:
+        return hit[1]
+    user = await asyncio.to_thread(auth_module.get_user_for_session, token)
+    if user:
+        if len(_session_cache) > 1000:
+            _session_cache.clear()
+        _session_cache[token] = (now, user)
+    else:
+        _session_cache.pop(token, None)
+    return user
 
 @app.get("/api/auth/me")
 async def me(request: Request):

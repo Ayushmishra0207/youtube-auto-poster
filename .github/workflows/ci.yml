@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt -r api/requirements.txt "psycopg[binary]>=3.2" pytest pyflakes
+      - run: pip install -r requirements.txt -r api/requirements.txt "psycopg[binary,pool]>=3.2" pytest pyflakes
       - name: Lint (fail only on undefined names / syntax errors)
         run: |
           python -m pyflakes api pipeline clipper *.py > pyflakes.txt || true

@@ -48,7 +48,7 @@ jobs:
           cache: pip
       - name: Install dependencies
         if: steps.gate.outputs.skip != '1'
-        run: pip install -r requirements.txt "psycopg[binary]>=3.2"
+        run: pip install -r requirements.txt "psycopg[binary,pool]>=3.2"
       - name: Engagement + Instagram pass
         if: steps.gate.outputs.skip != '1'
         run: python cloud_worker.py engagement

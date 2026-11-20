@@ -175,6 +175,29 @@ def _pg_connection():
     return psycopg.connect(database_url(), row_factory=dict_row, prepare_threshold=None, connect_timeout=15)
 
 
+# A fresh Postgres connection per query cost 1-2 s from Render (Oregon) to Supabase
+# (Singapore) and jammed the API under the dashboard's polling — reuse connections.
+_pool = None
+_pool_lock = __import__("threading").Lock()
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                try:
+                    from psycopg_pool import ConnectionPool
+                except ImportError:
+                    return None
+                _pool = ConnectionPool(
+                    database_url(), min_size=1, max_size=int(os.environ.get("DB_POOL_MAX", "5")),
+                    kwargs={"row_factory": dict_row, "prepare_threshold": None, "connect_timeout": 15},
+                    max_idle=300, timeout=30, check=ConnectionPool.check_connection, open=True,
+                )
+    return _pool
+
+
 def get_connection():
     return _pg_connection() if is_postgres() else _sqlite_connection()
 
@@ -203,6 +226,11 @@ def db_cursor():
     if not _initialized:
         init_db()
     pg = is_postgres()
+    pool = _get_pool() if pg else None
+    if pool is not None:
+        with pool.connection() as conn:   # commits on success, rolls back on error, returns to pool
+            yield _Cursor(conn.cursor(), True)
+        return
     conn = get_connection()
     try:
         cur = _Cursor(conn.cursor(), pg)
