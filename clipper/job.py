@@ -37,6 +37,14 @@ DEFAULT_REQUEST = {
     "audio_mode": "original",
     "credit_source": True,
     "use_ai": True,
+    # ── "Split into parts" (series) mode ──
+    "job_type": "viral",          # viral | series
+    "part_seconds": 60,           # length of each part (UI: 30-60)
+    "range_start": 0.0,           # optional: only split this window of the source (seconds)
+    "range_end": 0.0,             # 0 = until the end
+    "series_title": "",           # optional banner on top of every part
+    "part_label": "Part {n}",     # text under the video; {n} = part number, {total} = number of parts
+    "source_file": "",            # an uploaded file in output/clips/_sources (instead of a URL)
 }
 
 
@@ -68,6 +76,9 @@ def run_job(job_dir: Path) -> None:
     status = JobStatus(job_dir)
     req = {**DEFAULT_REQUEST, **json.loads((job_dir / "job.json").read_text(encoding="utf-8"))}
     status.update(pid=os.getpid(), started_at=time.time())
+    if req.get("job_type") == "series":
+        from clipper.series import run_series
+        return run_series(job_dir, req, status)
     mode = get_mode(req["mode"])
     n = int(req["num_clips"])
     preset = LENGTH_PRESETS.get(req["length"]) or (mode.min_len, mode.max_len)

@@ -131,6 +131,14 @@ export interface ClipRequest {
   audio_mode: "original" | "original_music" | "music_only";
   credit_source: boolean;
   use_ai: boolean;
+  // "Split into parts" (series) mode
+  job_type?: "viral" | "series";
+  part_seconds?: number;
+  range_start?: number;
+  range_end?: number;
+  series_title?: string;
+  part_label?: string;
+  source_file?: string;
 }
 
 export interface ClipResult {
@@ -144,7 +152,9 @@ export interface ClipResult {
   hashtags: string[];
   score: number;
   reason: string;
-  picked_by: "ai" | "signals";
+  picked_by: "ai" | "signals" | "series";
+  part?: number;
+  parts_total?: number;
   video_url: string;
   thumbnail_url: string;
   has_video: boolean;

@@ -175,6 +175,31 @@ export async function longRequest<T = any>(path: string, init: RequestInit = {})
   return data as T;
 }
 
+/** Upload a video file from the PC for "Split into parts" — XHR so big files show progress. */
+export function uploadClipSource(
+  file: File,
+  onProgress: (fraction: number) => void,
+): Promise<{ ok: boolean; source_file: string; filename: string; duration: number }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/api/clips/upload-source`);
+    const token = getToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status === 401) { try { handleUnauthorized(); } catch (err) { reject(err); } return; }
+      let data: any = {};
+      try { data = JSON.parse(xhr.responseText || "{}"); } catch { /* non-JSON error page */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.detail || `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed — check the connection and that the server is running"));
+    const fd = new FormData();
+    fd.append("file", file);
+    xhr.send(fd);
+  });
+}
+
 export function uploadClip(jobId: string, index: number) {
   return longRequest<{ ok: boolean; url: string; video_id: string }>(`/api/clips/${jobId}/${index}/upload`, { method: "POST" });
 }

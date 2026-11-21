@@ -30,6 +30,7 @@ class RenderOptions:
     audio_mode: str = "original"      # original | original_music | music_only
     music_path: Path | None = None
     progress_bar: bool = True
+    part_label: str = ""              # series mode: "PART 3" under the video
 
 
 def _layout(info: MediaInfo, mode: Mode, layout: str) -> tuple[list[str], int, int]:
@@ -68,7 +69,15 @@ def render_clip(src: Path, info: MediaInfo, start: float, end: float, out_dir: P
     out = out_dir / "clip.mp4"
 
     chain, cap_mv, hook_mv = _layout(info, mode, opts.layout)
-    ass = build_ass(words_rel, dur, opts.caption_style, cap_mv, opts.hook_text, hook_mv, opts.watermark)
+    part_mv = cap_mv
+    if opts.part_label:
+        fullscreen = opts.layout == "center_crop" or info.height > info.width
+        if fullscreen:          # video fills the frame: label in the lower third, captions under it
+            part_mv = cap_mv + 190
+        else:                   # label right under the video, captions move down a row
+            cap_mv = max(200, cap_mv - 160)
+    ass = build_ass(words_rel, dur, opts.caption_style, cap_mv, opts.hook_text, hook_mv, opts.watermark,
+                    part_label=opts.part_label, part_margin_v=part_mv)
     (out_dir / "subs.ass").write_text(ass, encoding="utf-8")
 
     # ffmpeg filter args treat ':' and '\' specially — run inside out_dir and use

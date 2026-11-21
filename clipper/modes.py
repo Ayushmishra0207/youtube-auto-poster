@@ -117,6 +117,15 @@ MODES: dict[str, Mode] = {m.key: m for m in [
 
 DEFAULT_MODE = "gta6_action"
 
+# "Split into parts" (series) look: whole frame kept (no punch-in), light grade.
+# Not in MODES, so it never shows up as a viral-moment mode card.
+SERIES_MODE = Mode(
+    key="series", label="Series", description="Whole video split into numbered parts.",
+    ai_brief="", w_energy=0.0, w_scene=0.0, w_speech=0.0, min_len=30, max_len=60,
+    zoom=1.0, contrast=1.04, saturation=1.06, brightness=0.0, vignette=False,
+    caption_style="clean", whisper_prompt="", yt_category="24",
+)
+
 
 # ── Caption styles ──────────────────────────────────────────────────────────────
 # Colours are #RRGGBB. `highlight` colours the word currently being spoken.

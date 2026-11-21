@@ -44,6 +44,7 @@ import json
 import os
 import pickle
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -1297,7 +1298,7 @@ def _clip_jobs_running() -> int:
 
 
 class ClipJobPayload(BaseModel):
-    url: str
+    url: str = ""
     mode: str = "gta6_action"
     num_clips: int = 3
     length: str = "auto"
@@ -1310,6 +1311,54 @@ class ClipJobPayload(BaseModel):
     audio_mode: str = "original"
     credit_source: bool = True
     use_ai: bool = True
+    # "Split into parts" (series) mode
+    job_type: str = "viral"          # viral | series
+    part_seconds: int = 60
+    range_start: float = 0
+    range_end: float = 0
+    series_title: str = ""
+    part_label: str = "Part {n}"
+    source_file: str = ""            # name returned by /api/clips/upload-source
+
+
+_UPLOAD_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+
+
+@app.post("/api/clips/upload-source")
+async def upload_clip_source(file: UploadFile = File(...)):
+    """Upload a video from the user's PC to split into parts (instead of a YouTube link)."""
+    import hashlib
+    from clipper.common import SOURCES_DIR, probe
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _UPLOAD_EXTS:
+        raise HTTPException(400, f"Unsupported file type '{ext or '?'}' — use MP4, MOV, MKV, WEBM, AVI or M4V")
+    SOURCES_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SOURCES_DIR / f"incoming_{secrets.token_hex(6)}{ext}"
+    digest = hashlib.sha1()
+
+    def _save() -> None:
+        with open(tmp, "wb") as out:
+            while chunk := file.file.read(8 * 1024 * 1024):
+                digest.update(chunk)
+                out.write(chunk)
+    try:
+        await asyncio.to_thread(_save)
+        name = f"upload_{digest.hexdigest()[:12]}{ext}"   # same file uploaded twice → reused
+        final = SOURCES_DIR / name
+        if final.exists():
+            tmp.unlink(missing_ok=True)
+        else:
+            os.replace(tmp, final)
+        info = await asyncio.to_thread(probe, final)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(400, f"That file doesn't look like a playable video: {exc}")
+    (SOURCES_DIR / (name + ".json")).write_text(
+        json.dumps({"filename": Path(file.filename or name).stem[:80]}, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "source_file": name, "filename": file.filename, "duration": round(info.duration, 2),
+            "width": info.width, "height": info.height}
 
 
 @app.get("/api/clips/options")
@@ -1349,8 +1398,23 @@ async def create_clip_job(payload: ClipJobPayload):
     if missing:
         raise HTTPException(503, f"Clip Maker isn't installed on this server (missing: {', '.join(missing)})")
     url = payload.url.strip()
-    if not url.lower().startswith(("http://", "https://")):
-        raise HTTPException(400, "Paste a full video link starting with https://")
+    series = payload.job_type == "series"
+    if payload.job_type not in ("viral", "series"):
+        raise HTTPException(400, "job_type must be viral or series")
+    if series and payload.source_file:
+        from clipper.series import UPLOAD_NAME_RE
+        from clipper.common import SOURCES_DIR
+        if not UPLOAD_NAME_RE.match(payload.source_file) or not (SOURCES_DIR / payload.source_file).exists():
+            raise HTTPException(400, "Uploaded video not found — upload it again")
+        url = ""
+    elif not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(400, "Paste a full video link starting with https://"
+                            + (" — or upload a video file" if series else ""))
+    if series:
+        if not 15 <= payload.part_seconds <= 180:
+            raise HTTPException(400, "Part length must be between 15 and 180 seconds")
+        if payload.range_start < 0 or (payload.range_end and payload.range_end <= payload.range_start):
+            raise HTTPException(400, "The 'To' time must be after the 'From' time")
     if payload.mode not in MODES:
         raise HTTPException(400, f"Unknown mode '{payload.mode}'")
     if payload.length not in LENGTH_PRESETS:
@@ -1366,7 +1430,9 @@ async def create_clip_job(payload: ClipJobPayload):
     if _clip_jobs_running() >= MAX_PARALLEL_CLIP_JOBS:
         return {"ok": False, "message": "A clip job is already running — wait for it to finish."}
 
-    job_dir = new_job({**payload.model_dump(), "url": url, "watermark": payload.watermark.strip()[:40]})
+    job_dir = new_job({**payload.model_dump(), "url": url, "watermark": payload.watermark.strip()[:40],
+                       "series_title": payload.series_title.strip()[:60],
+                       "part_label": (payload.part_label.strip() or "Part {n}")[:40]})
     proc = subprocess.Popen(
         [PYTHON, str(BASE_DIR / "clip_now.py"), "--job", job_dir.name],
         cwd=str(BASE_DIR), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

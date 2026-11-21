@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, authedMediaUrl, uploadClip } from "@/lib/api";
 import type { ClipJob, ClipOptions, ClipRequest, ClipResult } from "@/lib/types";
+import SeriesForm from "@/components/SeriesForm";
 import {
   Scissors, Flame, Laugh, Clapperboard, Sunset, BookOpen, Wand2, Link2, ClipboardPaste,
   Download, Copy, Upload, ExternalLink, CheckCircle, Trash2, Play, Square, Info, Sparkles, Check,
@@ -139,8 +140,10 @@ function ClipCard({ jobId, clip, onUploaded }: { jobId: string; clip: ClipResult
         )}
         <span className="absolute top-2 left-2 text-[10px] font-bold px-1.5 py-0.5 rounded-md tabular-nums"
               style={{ background: "rgba(0,0,0,0.7)", color: scoreColor }}
-              title={clip.picked_by === "ai" ? "AI virality estimate" : "Signal score (audio + scene + speech)"}>
-          {clip.picked_by === "ai" && <Sparkles size={9} className="inline mr-0.5 -mt-0.5" />}{clip.score}
+              title={clip.picked_by === "series" ? "Part number" : clip.picked_by === "ai" ? "AI virality estimate" : "Signal score (audio + scene + speech)"}>
+          {clip.picked_by === "series"
+            ? <>Part {clip.part ?? clip.index}{clip.parts_total ? `/${clip.parts_total}` : ""}</>
+            : <>{clip.picked_by === "ai" && <Sparkles size={9} className="inline mr-0.5 -mt-0.5" />}{clip.score}</>}
         </span>
         <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded-md tabular-nums text-slate-200" style={{ background: "rgba(0,0,0,0.7)" }}>
           {Math.round(clip.duration)}s
@@ -273,6 +276,7 @@ function JobCard({ job, modeLabel, onChange }: { job: ClipJob; modeLabel: string
 // ── Panel ───────────────────────────────────────────────────────────────────────
 
 export default function ClipsPanel() {
+  const [tool, setTool] = useState<"viral" | "series">("viral");
   const [opts, setOpts]       = useState<ClipOptions | null>(null);
   const [req, setReq]         = useState<ClipRequest>(DEFAULT_REQ);
   const [jobs, setJobs]       = useState<ClipJob[]>([]);
@@ -373,11 +377,26 @@ export default function ClipsPanel() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl md:text-2xl font-bold text-white flex items-center gap-2">
-          <Scissors size={22} style={{ color: "#4FC3F7" }} /> Viral Clip Maker
+          <Scissors size={22} style={{ color: "#4FC3F7" }} /> Clip Maker
         </h1>
         <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-          Paste a YouTube link → get vertical, captioned clips of the best moments. Built for GTA 6.
+          {tool === "viral"
+            ? "Paste a YouTube link → get vertical, captioned clips of the best moments. Built for GTA 6."
+            : "Turn a whole video (link or file) into numbered Shorts — Part 1, Part 2, … — of the length you choose."}
         </p>
+        <div className="flex gap-1 p-1 mt-3 rounded-xl w-fit" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}>
+          {([["viral", "Viral clips (best moments)"], ["series", "Split into parts"]] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setTool(k)}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                    style={{
+                      background: tool === k ? "rgba(79,195,247,0.15)" : "transparent",
+                      color: tool === k ? "#4FC3F7" : "#94a3b8",
+                      boxShadow: tool === k ? "inset 0 0 0 1px rgba(79,195,247,0.35)" : "none",
+                    }}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {opts && !opts.available && (
@@ -388,6 +407,9 @@ export default function ClipsPanel() {
         </div>
       )}
 
+      {tool === "series" && <SeriesForm opts={opts} onStarted={refresh} />}
+
+      {tool === "viral" && (
       <form onSubmit={submit} className="glass rounded-2xl p-4 md:p-5 space-y-5"
             style={opts && !opts.available ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
         {/* URL */}
@@ -526,17 +548,21 @@ export default function ClipsPanel() {
           </p>
         </div>
       </form>
+      )}
 
       {loadErr && <p className="text-sm text-red-400">{loadErr}</p>}
 
       <div className="space-y-4">
         {jobs.length === 0 && !loadErr && (
           <div className="glass rounded-2xl p-8 text-center text-sm" style={{ color: "var(--muted)" }}>
-            No clip jobs yet. Paste a link above to make your first clips.
+            No clip jobs yet. Paste a link (or upload a video) above to make your first clips.
           </div>
         )}
         {jobs.map((j) => (
-          <JobCard key={j.job_id} job={j} modeLabel={modeLabels[j.request?.mode] ?? j.request?.mode} onChange={refresh} />
+          <JobCard key={j.job_id} job={j} onChange={refresh}
+                   modeLabel={j.request?.job_type === "series"
+                     ? `Split into parts · ${j.request.part_seconds ?? 60}s each`
+                     : (modeLabels[j.request?.mode] ?? j.request?.mode)} />
         ))}
       </div>
     </div>

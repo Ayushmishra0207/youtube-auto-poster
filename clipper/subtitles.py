@@ -56,8 +56,10 @@ def build_ass(
     words: list[dict], duration: float, style: CaptionStyle | None, caption_margin_v: int,
     hook_text: str = "", hook_margin_v: int = 260, watermark: str = "",
     width: int = 1080, height: int = 1920,
+    part_label: str = "", part_margin_v: int = 560,
 ) -> str:
-    """`words` are clip-relative: [{"start","end","text"}]."""
+    """`words` are clip-relative: [{"start","end","text"}].
+    part_label: e.g. "PART 3" — shown for the whole clip right under the video (series mode)."""
     st = style
     font = st.font if st else "Impact"
     size = st.size if st else 90
@@ -79,6 +81,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,{font},{size},{primary},&H000000FF,{outline},{back},-1,0,0,0,100,100,1,0,{border_style},{outline_w},{shadow},2,70,70,{caption_margin_v},1
 Style: Hook,Impact,78,&H00FFFFFF,&H000000FF,&H00000000,&H00101010,-1,0,0,0,100,100,1,0,3,18,0,8,80,80,{hook_margin_v},1
+Style: Part,Impact,96,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,7,3,2,60,60,{part_margin_v},1
 Style: Mark,Segoe UI Semibold,38,&H70FFFFFF,&H000000FF,&H90000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,0,3,40,40,40,1
 
 [Events]
@@ -90,6 +93,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if hook:
         hfont = f"{{{HINDI_TAGS}}}" if _DEVANAGARI.search(hook) else ""
         events.append(f"Dialogue: 2,{_ts(0)},{_ts(duration)},Hook,,0,0,0,,{{\\fad(250,0)}}{hfont}{hook}")
+
+    label = _clean(part_label)
+    if label:
+        lfont = f"{{{HINDI_TAGS}}}" if _DEVANAGARI.search(label) else ""
+        events.append(f"Dialogue: 2,{_ts(0)},{_ts(duration)},Part,,0,0,0,,{{\fad(200,0)}}{lfont}{label}")
 
     mark = _clean(watermark)
     if mark:
